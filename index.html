@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#13251d" />
+    <meta name="description" content="A private, simple view of your money." />
+    <title>budge it — your money, clearly</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#overview" aria-label="Budge it home"><span class="brand-dot"></span>budge it</a>
+        <nav class="side-nav" aria-label="Primary navigation">
+          <button class="nav-item active" data-view="overview"><span>⌂</span>Overview</button>
+          <button class="nav-item" data-view="budget"><span>◒</span>Budget</button>
+          <button class="nav-item" data-view="transactions"><span>↕</span>Transactions</button>
+          <button class="nav-item" data-view="accounts"><span>▣</span>Accounts</button>
+          <button class="nav-item" data-view="networth"><span>⌁</span>Net worth</button>
+        </nav>
+        <div class="side-bottom">
+          <div class="sync-chip"><span class="sync-pulse"></span>Updated just now</div>
+          <button class="nav-item muted" data-view="settings"><span>⚙</span>Settings</button>
+          <div class="profile"><div class="avatar">D</div><div><strong>Daniel</strong><small>Personal space</small></div><span>⌄</span></div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="mobile-head"><a class="brand" href="#overview"><span class="brand-dot"></span>budge it</a><button class="more-button" aria-label="Open menu">☰</button></header>
+
+        <section id="overview" class="view active">
+          <header class="page-head"><div><p class="eyebrow">Tuesday, November 10</p><h1>Good morning, Daniel.</h1><p class="subhead">Here’s your money at a glance.</p></div><button class="quiet-button" id="refreshButton">↻&nbsp; Refresh</button></header>
+          <div class="hero-grid">
+            <article class="spend-card"><div class="card-label">November spending <button class="icon-button" title="Spending excludes transfers, income, and pending transactions">i</button></div><div class="money-row"><span class="big-money" id="monthSpend">$2,684</span><span class="trend good">↓ 12% <small>vs Oct.</small></span></div><div class="spend-meter"><span id="spendMeter"></span></div><div class="meter-caption"><span>$2,684 spent</span><strong id="remainingTotal">$1,116 left</strong></div></article>
+            <article class="net-card"><div class="card-label">Net worth <button class="icon-button" title="Included balances minus included debt">i</button></div><div class="big-money">$48,240</div><div class="trend good">↑ $1,240 <small>this month</small></div><div class="mini-chart" aria-label="Net worth rose over the last six months"><svg viewBox="0 0 286 78" preserveAspectRatio="none"><path class="chart-fill" d="M0,64 C16,61 22,54 38,57 S63,51 78,53 S98,41 112,46 S139,35 151,39 S172,35 185,31 S201,36 214,25 S238,26 249,16 S270,19 286,7 L286,78 L0,78Z"/><path class="chart-line" d="M0,64 C16,61 22,54 38,57 S63,51 78,53 S98,41 112,46 S139,35 151,39 S172,35 185,31 S201,36 214,25 S238,26 249,16 S270,19 286,7"/></svg><span>Jun</span><span>Nov</span></div></article>
+          </div>
+          <div class="section-head"><div><h2>Budget pulse</h2><p>Where your November plan stands.</p></div><button class="text-button" data-go="budget">See all budgets <span>→</span></button></div>
+          <div id="overviewBudget" class="budget-pulse"></div>
+          <div class="lower-grid">
+            <section class="panel recent-panel"><div class="panel-head"><div><h2>Recent activity</h2><p>Your latest posted transactions.</p></div><button class="text-button" data-go="transactions">View all <span>→</span></button></div><div id="recentTransactions" class="transaction-list"></div></section>
+            <section class="panel attention-panel"><div class="panel-head"><div><h2>Needs attention</h2><p>A few small things to review.</p></div></div><div class="attention-item"><div class="attention-icon coral">!</div><div><strong>Dining is over plan</strong><p>$44 over your November budget.</p></div><button data-go="budget" aria-label="Review Dining budget">→</button></div><div class="attention-item"><div class="attention-icon amber">?</div><div><strong>1 transaction needs a category</strong><p>“Square *Greenleaf” · $18.50</p></div><button data-go="transactions" aria-label="Categorize transaction">→</button></div><div class="attention-item"><div class="attention-icon blue">↻</div><div><strong>Capital One synced</strong><p>Today at 8:42 AM</p></div></div></section>
+          </div>
+        </section>
+
+        <section id="budget" class="view">
+          <header class="page-head budget-head"><div><p class="eyebrow">Your spending plan</p><h1>November budget</h1><p class="subhead">Posted spending counts toward what’s left. Pending items are shown separately.</p></div><div class="head-actions"><button class="month-select">‹ <span>November 2026</span> ›</button><button class="primary-button" id="addBudget">+ Add category</button></div></header>
+          <div class="budget-summary"><div><span>Total budget</span><strong id="budgetTotal">$3,800</strong></div><div><span>Spent so far</span><strong id="budgetSpent">$2,684</strong></div><div><span>Remaining</span><strong class="green" id="budgetRemaining">$1,116</strong></div><div><span>Pending</span><strong>$142</strong><small>not included above</small></div></div>
+          <div class="budget-toolbar"><div class="legend"><span><i class="green-dot"></i> On track</span><span><i class="amber-dot"></i> Nearly there</span><span><i class="coral-dot"></i> Over plan</span></div><div class="toolbar-actions"><button class="quiet-button" id="manageCategories">Manage categories</button><button class="quiet-button" id="resetData">Reset demo changes</button></div></div>
+          <div id="budgetGroups" class="budget-groups"></div>
+        </section>
+
+        <section id="transactions" class="view">
+          <header class="page-head"><div><p class="eyebrow">All activity</p><h1>Transactions</h1><p class="subhead">Correct categories, record cash activity, and keep edge cases out of your budget without losing the record.</p></div><div class="head-actions"><button class="quiet-button" id="exportButton">↓ Export CSV</button><button class="primary-button" id="addTransaction">+ Add transaction</button></div></header>
+          <div class="budget-explainer"><span>◒</span><p><strong>Budget status:</strong> Included transactions affect category spending. Hidden transactions remain in your activity history and export, but do not count toward the budget.</p></div>
+          <div class="transaction-controls"><label class="search-box"><span>⌕</span><input id="transactionSearch" placeholder="Search merchant or category" /></label><select id="categoryFilter"><option value="all">All categories</option></select><select id="stateFilter"><option value="all">Posted & pending</option><option value="posted">Posted only</option><option value="pending">Pending only</option></select></div>
+          <div class="table-wrap"><table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Account</th><th>Budget</th><th class="amount-col">Amount</th></tr></thead><tbody id="transactionTable"></tbody></table></div>
+        </section>
+
+        <section id="accounts" class="view">
+          <header class="page-head"><div><p class="eyebrow">Your connected money</p><h1>Accounts</h1><p class="subhead">Balances last updated today at 8:42 AM.</p></div><button class="primary-button" id="connectButton">+ Connect institution</button></header>
+          <div class="accounts-note"><span class="lock">⌑</span><p>Demo mode — account connections will be available when secure bank linking is set up.</p></div><div id="accountsList" class="accounts-list"></div>
+        </section>
+
+        <section id="networth" class="view">
+          <header class="page-head"><div><p class="eyebrow">Your bigger picture</p><h1>Net worth</h1><p class="subhead">Included assets minus liabilities, as of today at 8:42 AM.</p></div><button class="quiet-button" data-go="accounts">Manage accounts</button></header>
+          <div class="networth-total"><div><span>Current net worth</span><strong>$48,240</strong><p class="trend good">↑ $1,240 <small>since Oct. 1</small></p></div><div class="large-chart"><svg viewBox="0 0 760 210" preserveAspectRatio="none"><defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b7dcc6" stop-opacity=".7"/><stop offset="1" stop-color="#b7dcc6" stop-opacity="0"/></linearGradient></defs><path class="gridline" d="M0 40H760M0 104H760M0 168H760"/><path fill="url(#area)" d="M0 186 C43 176 62 162 94 166 S142 153 172 157 S219 144 247 148 S289 130 323 136 S365 124 398 129 S449 111 477 117 S525 106 551 94 S601 97 628 76 S674 81 697 58 S729 56 760 37 V210H0Z"/><path class="net-line" d="M0 186 C43 176 62 162 94 166 S142 153 172 157 S219 144 247 148 S289 130 323 136 S365 124 398 129 S449 111 477 117 S525 106 551 94 S601 97 628 76 S674 81 697 58 S729 56 760 37"/><circle cx="760" cy="37" r="6" class="end-dot"/></svg><div class="chart-labels"><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span></div></div></div>
+          <div class="worth-breakdown"><section class="panel"><div class="panel-head"><div><h2>Included assets</h2><p>What you own.</p></div><strong class="asset-total">$61,920</strong></div><div id="assetsList"></div></section><section class="panel"><div class="panel-head"><div><h2>Included liabilities</h2><p>What you owe.</p></div><strong class="debt-total">−$13,680</strong></div><div id="debtsList"></div></section></div>
+        </section>
+
+        <section id="settings" class="view"><header class="page-head"><div><p class="eyebrow">Personalize your space</p><h1>Settings</h1><p class="subhead">This prototype saves your budget edits in this browser only.</p></div></header><section class="settings-card"><h2>Prototype controls</h2><p>Use the reset button on the Budget page to restore the starting sample data. No financial accounts are connected, and no data leaves your browser.</p><button class="primary-button" data-go="budget">Review budget</button></section></section>
+      </main>
+    </div>
+    <dialog id="budgetDialog"><form method="dialog"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="eyebrow">Edit monthly limit</p><h2 id="dialogTitle">Groceries</h2><label>Budget amount <div class="currency-input"><span>$</span><input id="budgetAmount" inputmode="decimal" type="number" min="0" step="1" /></div></label><p class="dialog-hint">Changes are saved in this browser. Spending totals use posted transactions only.</p><div class="dialog-actions"><button class="quiet-button" value="cancel">Cancel</button><button class="primary-button" id="saveBudget" value="default">Save budget</button></div></form></dialog>
+    <dialog id="categoryDialog"><form id="categoryForm"><button class="dialog-close" type="button" onclick="this.closest('dialog').close()" aria-label="Close">×</button><p class="eyebrow">Custom budget category</p><h2>Add category</h2><div class="form-grid"><label>Category name<input id="categoryName" name="name" required maxlength="30" placeholder="e.g. Pet care" /></label><label>Group<input id="categoryGroup" name="group" required maxlength="30" list="categoryGroups" placeholder="e.g. Everyday" /></label><label>Monthly limit<div class="currency-input"><span>$</span><input name="budget" inputmode="decimal" required type="number" min="0" step="1" value="0" /></div></label></div><datalist id="categoryGroups"></datalist><p class="dialog-hint">You can rename, regroup, or delete any category later. New categories start at zero spent.</p><div class="dialog-actions"><button class="quiet-button" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="primary-button" type="submit">Add category</button></div></form></dialog>
+    <dialog id="categoryManagerDialog"><form method="dialog" class="category-manager-form"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="eyebrow">Your budget setup</p><h2>Manage categories</h2><p class="dialog-hint">Rename, move, or change the limit for any preset. Deleting a category keeps affected transaction records but marks them Uncategorized.</p><div id="categoryManagerList" class="category-manager-list"></div><div class="dialog-actions"><button class="quiet-button" value="cancel">Done</button></div></form></dialog>
+    <dialog id="manualTransactionDialog"><form id="manualTransactionForm"><button class="dialog-close" type="button" onclick="this.closest('dialog').close()" aria-label="Close">×</button><p class="eyebrow">Manual entry</p><h2>Add a transaction</h2><div class="form-grid"><label>Merchant or description<input id="manualMerchant" name="merchant" required placeholder="e.g. Cash purchase" /></label><label>Date<input id="manualDate" name="date" required type="date" /></label><label>Amount<div class="currency-input"><span>$</span><input id="manualAmount" name="amount" inputmode="decimal" required type="number" min="0.01" step="0.01" /></div></label><label>Type<select name="kind"><option value="expense">Expense</option><option value="income">Income</option></select></label><label>Category<select id="manualCategory" name="category"></select></label><label>Account <input name="account" placeholder="Manual entry" /></label></div><label class="check-row"><input id="manualBudgetHidden" name="hidden" type="checkbox" /> Keep this transaction out of the budget</label><p class="dialog-hint">Manual entries remain in the transaction history. Expenses affect their category unless you hide them from the budget.</p><div class="dialog-actions"><button class="quiet-button" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="primary-button" type="submit">Add transaction</button></div></form></dialog>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

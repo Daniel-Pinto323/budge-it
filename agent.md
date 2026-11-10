@@ -164,3 +164,33 @@ Use provider IDs for deduplication. Scope every query to the authenticated user.
 ## Notes for the next agent
 
 This file records a plan, not implemented code or verified production approval. Begin by checking the repository state and local instructions. Keep live financial data out of development fixtures, verify current aggregator product access and institution/account support before relying on it, and tell the user what was actually implemented versus planned.
+
+## Implementation status — 2026-11-10
+
+### Accomplished
+
+- Built a dependency-free, original responsive web prototype in the repository root (`index.html`, `styles.css`, and `app.js`).
+- Implemented synthetic-data screens for Overview, Budget, Transactions, Accounts, Net Worth, and Settings.
+- Implemented editable monthly budget limits, category status/progress, transaction search and filtering, editable transaction categories, account display, account inclusion controls, CSV export, and mobile layout.
+- Added manual transaction entry for expenses and income. Manual expenses affect their selected budget category by default.
+- Added a per-transaction **Included / Hidden** budget control. Hidden transactions remain logged, searchable, and exported, but do not affect category or total budget spending. This is intended for duplicates and other deliberate exceptions.
+- Added category management for the starter preset: users can add a category with a group and monthly limit, and can rename, regroup, update the limit for, or delete any preset/custom category. Deletion retains transaction history and makes directly affected transactions Uncategorized.
+- Added local-browser persistence for budget edits, transaction category edits, manual transactions, and budget visibility choices, plus a demo reset control.
+- Documented the runnable prototype and its walkthrough in `README.md`.
+
+### Still to do
+
+- Replace browser-local synthetic data with authenticated, user-scoped persistence and a real database/migration layer.
+- Implement transaction lifecycle details: robust pending-to-posted matching, true duplicate detection/review, transfers, refunds/reimbursements, rules, reconciliation, and an audit trail for manual edits/hides.
+- Make account inclusion actually recompute the net-worth total and history; current account/net-worth data is still demonstrative.
+- Add dedicated category-group management, rollovers, month navigation, import, data export/delete, and accessible confirmation/error states.
+- Validate Plaid product and institution coverage, then implement the server-side Sandbox flow before considering any live Chase or Capital One data.
+- Implement authentication, token encryption, verified webhooks, idempotent sync jobs, disconnect/deletion, deployment, and the production security baseline described above.
+
+## Documentation maintenance rule
+
+When a major plan, scope, architecture, user-facing capability, delivery milestone, or implementation accomplishment is established or changed, update both `agent.md` and `README.md` in the same work session:
+
+- In `agent.md`, update the implementation-status and remaining-work sections, and revise affected product/technical guidance when needed.
+- In `README.md`, update the user-facing setup, walkthrough, feature behavior, and limitations that changed.
+- Keep the two documents accurate about what is implemented versus planned. Never describe synthetic or placeholder behavior as a live financial integration.
