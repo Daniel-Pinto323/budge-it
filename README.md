@@ -56,12 +56,38 @@ an `https://` `PUBLIC_URL`.
 The app is one Python process with a SQLite file. It needs an always-on machine,
 a persistent disk, and something in front of it that provides HTTPS.
 
-**Status (2026-11-10):** the Proxmox LXC for budge it has been created on the
-home server (Debian 13, unprivileged, nesting on, DHCP on `vmbr0`, start at boot,
-Proxmox firewall enabled on the container). The app is not installed in it yet,
-and no HTTPS access path (Tailscale, Cloudflare Tunnel, or Caddy) is chosen. The
-Proxmox firewall also still needs to be enabled at the datacenter level for the
-container's firewall to take effect. Step 1 below is done; continue at step 2.
+**Status (2026-11-11):** this app has been deployed in a Proxmox LXC (Debian 13,
+unprivileged, nesting on, start at boot, container firewall on) under
+`/opt/budgeit` as a systemd service, and is served over HTTPS to the maintainer's
+own devices through **Tailscale** (the "Tailscale only" option in step 5). It uses
+sample data only; no bank is connected yet and backups are not set up.
+
+#### Tailscale setup used (unprivileged Proxmox LXC)
+
+1. On the Proxmox host, give the container the tunnel device: pass through
+   `/dev/net/tun` (Proxmox's device passthrough, or `lxc.cgroup2.devices.allow:
+   c 10:200 rwm` plus `lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file`
+   in `/etc/pve/lxc/<id>.conf`), then fully stop and start the container. The host
+   must have `/dev/net/tun` (run `modprobe tun` if not).
+2. Inside the container, install Tailscale and join the tailnet:
+   `tailscale up --hostname=budgeit`.
+3. In the Tailscale admin console's DNS page, enable **MagicDNS** and
+   **HTTPS Certificates**. (Issued certificates list the machine name in public
+   certificate-transparency logs.)
+4. Run `tailscale serve --bg 8080`. Tailscale now answers HTTPS on port 443 and
+   forwards to the app.
+5. In `.env`, set `HOST=127.0.0.1`, keep `PORT=8080`, set
+   `PUBLIC_URL=https://budgeit.<tailnet>.ts.net` and `TRUST_PROXY=1`, then
+   `systemctl restart budgeit`. The plain-HTTP LAN address stops working, and the
+   container's firewall rule for port 8080 is no longer needed.
+6. Install Tailscale on every device that should reach the app (laptop, iPhone)
+   and sign in to the same account. A device must have Tailscale connected to
+   open the app, at home or away.
+
+Because the app is private to the tailnet, provider webhooks cannot reach it;
+data refreshes on the periodic sync and the Sync buttons. For Plaid OAuth banks,
+confirm at registration that a `*.ts.net` redirect URI is accepted, or use a
+Cloudflare Tunnel instead.
 
 1. **Create a container.** A dedicated unprivileged Debian LXC with 1 core, 512 MB
    RAM and 4 GB disk is plenty. Keep it separate from other services.
@@ -126,6 +152,19 @@ cd /opt/budgeit && git pull && systemctl restart budgeit
   an access proxy in front.
 - Plaid access tokens are encrypted with `BUDGEIT_ENCRYPTION_KEY`. Plaid webhooks
   are signature-verified; MX webhooks require HTTP Basic credentials.
+- Only the Plaid access tokens are encrypted at rest. Transactions, balances and
+  account names are stored as plain SQLite rows, protected by file permissions
+  (`0600`), the container boundary and private network access. Treat the database
+  file and any backup of it as sensitive, and encrypt copies that leave the server.
 - Connections are read-only. The app cannot move money.
+
+### Planned hardening (not implemented)
+
+Possible future improvements to data protection, roughly in priority order:
+encrypted backups, full-disk (LUKS) or encrypted-volume storage for the data
+directory, an encrypted SQLite database (SQLCipher), field-level encryption of
+sensitive columns, better key management and rotation (the encryption key is
+currently a plain value in `.env`), and two-factor sign-in. See `agent.md` for the
+trade-offs.
 - **Settings → Delete all my data** revokes every connection at the provider and
   wipes your records.

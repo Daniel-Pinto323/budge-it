@@ -187,12 +187,29 @@ This file records a plan, not implemented code or verified production approval. 
 - Validate Plaid product and institution coverage, then implement the server-side Sandbox flow before considering any live Chase or Capital One data.
 - Implement authentication, token encryption, verified webhooks, idempotent sync jobs, disconnect/deletion, deployment, and the production security baseline described above.
 
-## Deployment status — 2026-11-10
+## Deployment status — 2026-11-11
 
-- A dedicated Proxmox LXC for budge it has been created on the user's homelab server (see `/home/danielp/agents/homelab_agent.md`). Intended spec: Debian 13, unprivileged, nesting on, ~2 cores, ~1 GiB RAM, 512 MiB swap, 8–10 GiB disk on `local-lvm`, DHCP on `vmbr0`, start at boot, container firewall enabled. It is CT 102 at `192.168.5.186/22` on the home LAN (`192.168.4.0`–`192.168.7.255`), seen as a DHCP lease on 2026-11-10; an Eero reservation is still to be set. Final sizes were not confirmed; verify before relying on them.
-- Not done yet: app installed in the container, `.env`/encryption key, systemd service, HTTPS access path (Tailscale / Cloudflare Tunnel / Caddy undecided), backups. Proxmox reports the firewall is still disabled at the datacenter level, so the container firewall is not yet enforcing anything.
+Site-specific details (host addresses, container IDs, router and firewall settings, hostnames, the maintainer's tailnet) are deliberately not recorded in this public repository; they live in the maintainer's private homelab notes.
+
+- Running: budge it is deployed in a dedicated unprivileged Debian 13 Proxmox LXC under `/opt/budgeit` as the `budgeit` systemd service (system user `budgeit`, data in `/var/lib/budgeit`, `deploy/budgeit.service`). It works with the built-in sample data; no real bank is connected yet.
+- HTTPS access path: **Tailscale** (tailnet-only, not public). The container needs `/dev/net/tun` passed through from the Proxmox host (and a full container restart). Tailscale runs inside it, MagicDNS and HTTPS Certificates are enabled in the Tailscale admin console, and `tailscale serve --bg 8080` terminates HTTPS and forwards to the app on `127.0.0.1:8080`. `.env` uses `HOST=127.0.0.1`, `PORT=8080`, `PUBLIC_URL=https://<machine>.<tailnet>.ts.net`, `TRUST_PROXY=1`. The app is not exposed to the LAN or the internet. Laptop and iPhone are on the tailnet and the HTTPS URL loads on both.
+- Consequence for providers: the app is not reachable from the public internet, so Plaid/MX webhooks cannot arrive; data refreshes on the periodic sync (`SYNC_INTERVAL_MINUTES`) and the Sync buttons. Plaid OAuth institutions (Chase, Capital One) need a registered HTTPS redirect URI; whether a `*.ts.net` address is accepted must be verified at registration, with Cloudflare Tunnel as the fallback. Tailscale Funnel is another option for exposing only a webhook path.
+- Not done yet: Plaid Sandbox credentials in `.env`, Plaid production access (the free Trial plan, up to 10 Items, may apply; verify in the Dashboard), a deploy-from-git workflow on the server, backups (nightly SQLite `.backup` copied off the container, with the encryption key stored separately), and the hardening listed below.
 - Discrepancy to resolve: the implementation-status section above describes the earlier static prototype, but the repo now contains a Python server (`server.py`, `budgeit/`, SQLite), `deploy/budgeit.service`, and `deploy/Caddyfile`, documented in `README.md`. Re-verify the codebase and update this file accordingly.
-- Keep live bank data out of the container until backups and the access path are in place.
+- Keep live bank data out of the deployment until backups and the access path are in place.
+
+## Future hardening (nice to have) — enhanced data encryption
+
+Current state, from `budgeit/security.py` and `db.py`: only the Plaid access tokens are encrypted at rest (Fernet, keyed by `BUDGEIT_ENCRYPTION_KEY`). Passwords are scrypt hashes, session tokens are stored as SHA-256 hashes, and traffic is HTTPS over Tailscale. Transactions, balances, account names and categories are plain SQLite rows protected only by file permissions (`0600` file in a `0700` directory), the container boundary and Tailscale-only access. Anyone who obtains the disk, a container backup or a database copy can read them. Not urgent for a private, tailnet-only instance, but worth doing later, roughly in this order:
+
+1. **Encrypt backups.** Encrypt any database copy or Proxmox backup that leaves the server (for example with `age` or `gpg`), and store the encryption key separately from the backups.
+2. **Full-disk encryption of the data volume.** LUKS on the Proxmox storage holding the container, or an encrypted volume mounted at `DATA_DIR`. Cost: the key or passphrase must be supplied at boot, so the server will not come back unattended after a power cut unless the key is stored on the host.
+3. **Encrypted SQLite.** SQLCipher or an equivalent to encrypt the whole database file. Cost: it needs a non-standard SQLite build and a key-management change to the code.
+4. **Field-level encryption of sensitive columns** (merchant names, notes, account names and masks) with the existing key or a separate data key, accepting that search and filtering on those fields get harder.
+5. **Key management.** Move `BUDGEIT_ENCRYPTION_KEY` out of the plain `.env` (for example systemd credentials, or a secrets manager), support key rotation by re-encrypting stored tokens, and consider envelope encryption (a data key wrapped by a master key).
+6. **Two-factor sign-in** and an audit trail for sensitive actions (not encryption, but related hardening).
+
+When any of these is implemented, move it from this list to the implementation status and update `README.md`.
 
 ## Documentation maintenance rule
 
