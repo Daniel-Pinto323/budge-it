@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#13251d" />
+    <meta name="description" content="A private, simple view of your money." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="budge it" />
+    <title>budge it — your money, clearly</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icon-180.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="loginScreen" class="login-screen" hidden>
+      <form id="loginForm" class="login-card">
+        <div class="brand"><span class="brand-dot"></span>budge it</div>
+        <h1>Welcome back.</h1>
+        <p class="subhead">Sign in to see your money.</p>
+        <label>Email<input name="email" type="email" autocomplete="username" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
+        <p id="loginError" class="form-error" role="alert" hidden></p>
+        <button class="primary-button" type="submit">Sign in</button>
+      </form>
+    </main>
+
+    <div class="app-shell" id="appShell" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="#overview" aria-label="Budge it home"><span class="brand-dot"></span>budge it</a>
+        <nav class="side-nav" aria-label="Primary navigation">
+          <button class="nav-item active" data-view="overview"><span>⌂</span>Overview</button>
+          <button class="nav-item" data-view="budget"><span>◒</span>Budget</button>
+          <button class="nav-item" data-view="transactions"><span>↕</span>Transactions</button>
+          <button class="nav-item" data-view="accounts"><span>▣</span>Accounts</button>
+          <button class="nav-item" data-view="networth"><span>⌁</span>Net worth</button>
+        </nav>
+        <div class="side-bottom">
+          <div class="sync-chip"><span class="sync-pulse" id="syncPulse"></span><span id="syncChip">Not synced yet</span></div>
+          <button class="nav-item muted" data-view="settings"><span>⚙</span>Settings</button>
+          <div class="profile"><div class="avatar" id="avatar"></div><div><strong id="profileName"></strong><small>Personal space</small></div></div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="mobile-head"><a class="brand" href="#overview"><span class="brand-dot"></span>budge it</a><button class="more-button" data-go="settings" aria-label="Settings">⚙</button></header>
+        <div id="demoBanner" class="demo-banner" hidden><p><strong>Sample data.</strong> These accounts and transactions are synthetic, not a real bank connection.</p><button class="quiet-button" data-action="remove-demo">Remove sample data</button></div>
+
+        <section id="overview" class="view active">
+          <header class="page-head"><div><p class="eyebrow" id="todayLabel"></p><h1 id="greeting"></h1><p class="subhead">Here’s your money at a glance.</p></div><button class="quiet-button" data-action="sync-all">↻&nbsp; Refresh</button></header>
+          <div class="hero-grid">
+            <article class="spend-card"><div class="card-label"><span data-month-name></span>&nbsp;spending <button class="icon-button" title="Posted spending in budget categories plus uncategorized purchases. Excludes transfers, income, hidden and pending transactions.">i</button></div><div class="money-row"><span class="big-money" id="monthSpend"></span><span class="trend" id="lastMonthSpend"></span></div><div class="spend-meter"><span id="spendMeter"></span></div><div class="meter-caption"><span id="spentCaption"></span><strong id="remainingTotal"></strong></div></article>
+            <article class="net-card"><div class="card-label">Net worth <button class="icon-button" title="Included balances minus included debt, from the most recent sync">i</button></div><div class="big-money" id="netWorthHero"></div><div class="trend" id="netWorthTrend"></div><div class="mini-chart" id="miniChart"></div></article>
+          </div>
+          <div class="section-head"><div><h2>Budget pulse</h2><p>Where your <span data-month-name></span> plan stands.</p></div><button class="text-button" data-go="budget">See all budgets <span>→</span></button></div>
+          <div id="overviewBudget" class="budget-pulse"></div>
+          <div class="lower-grid">
+            <section class="panel recent-panel"><div class="panel-head"><div><h2>Recent activity</h2><p>Your latest transactions.</p></div><button class="text-button" data-go="transactions">View all <span>→</span></button></div><div id="recentTransactions" class="transaction-list"></div></section>
+            <section class="panel attention-panel"><div class="panel-head"><div><h2>Needs attention</h2><p>A few small things to review.</p></div></div><div id="attentionList"></div></section>
+          </div>
+        </section>
+
+        <section id="budget" class="view">
+          <header class="page-head budget-head"><div><p class="eyebrow">Your spending plan</p><h1><span data-month-name></span> budget</h1><p class="subhead">Posted spending counts toward what’s left. Pending items are shown separately.</p></div><div class="head-actions"><div class="month-select"><button id="prevMonth" aria-label="Previous month">‹</button><span id="monthLabel"></span><button id="nextMonth" aria-label="Next month">›</button></div><button class="primary-button" id="addBudget">+ Add category</button></div></header>
+          <div class="budget-summary"><div><span>Total budget</span><strong id="budgetTotal"></strong></div><div><span>Spent so far</span><strong id="budgetSpent"></strong></div><div><span id="budgetRemainingLabel">Remaining</span><strong id="budgetRemaining"></strong></div><div><span>Pending</span><strong id="budgetPending"></strong><small>not included above</small></div></div>
+          <div class="budget-toolbar"><div class="legend"><span><i class="green-dot"></i> On track</span><span><i class="amber-dot"></i> Nearly there</span><span><i class="coral-dot"></i> Over plan</span></div><div class="toolbar-actions"><button class="quiet-button" id="manageCategories">Manage categories</button></div></div>
+          <div id="budgetGroups" class="budget-groups"></div>
+        </section>
+
+        <section id="transactions" class="view">
+          <header class="page-head"><div><p class="eyebrow">All activity</p><h1>Transactions</h1><p class="subhead">Correct categories, record cash activity, and keep edge cases out of your budget without losing the record.</p></div><div class="head-actions"><a class="quiet-button" href="/api/export.csv" download>↓ Export CSV</a><button class="primary-button" id="addTransaction">+ Add transaction</button></div></header>
+          <div class="budget-explainer"><span>◒</span><p><strong>Budget status:</strong> Included transactions affect category spending. Hidden transactions remain in your activity history and export, but do not count toward the budget.</p></div>
+          <div class="transaction-controls"><label class="search-box"><span>⌕</span><input id="transactionSearch" placeholder="Search merchant or category" /></label><select id="categoryFilter" aria-label="Filter by category"><option value="all">All categories</option></select><select id="stateFilter" aria-label="Filter by status"><option value="all">Posted & pending</option><option value="posted">Posted only</option><option value="pending">Pending only</option></select></div>
+          <div class="table-wrap"><table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Account</th><th>Budget</th><th class="amount-col">Amount</th></tr></thead><tbody id="transactionTable"></tbody></table></div>
+          <p class="table-note" id="transactionCount"></p>
+        </section>
+
+        <section id="accounts" class="view">
+          <header class="page-head"><div><p class="eyebrow">Your connected money</p><h1>Accounts</h1><p class="subhead" id="accountsSubhead"></p></div><div class="head-actions"><button class="quiet-button" data-action="sync-all">↻ Sync all</button><button class="primary-button" id="connectButton">+ Connect institution</button></div></header>
+          <div class="accounts-note"><span class="lock">⌑</span><p>Read-only connections. You sign in with your bank through Plaid or MX — budge it never sees or stores your bank password. Data arrives when the provider updates it, not in real time.</p></div>
+          <div id="accountsList" class="accounts-list"></div>
+        </section>
+
+        <section id="networth" class="view">
+          <header class="page-head"><div><p class="eyebrow">Your bigger picture</p><h1>Net worth</h1><p class="subhead" id="networthSubhead"></p></div><button class="quiet-button" data-go="accounts">Manage accounts</button></header>
+          <div class="networth-total"><div><span>Current net worth</span><strong id="netWorthTotal"></strong><p class="trend" id="netWorthTrendLarge"></p></div><div class="large-chart" id="largeChart"></div></div>
+          <div class="worth-breakdown"><section class="panel"><div class="panel-head"><div><h2>Included assets</h2><p>What you own.</p></div><strong class="asset-total" id="assetTotal"></strong></div><div id="assetsList"></div></section><section class="panel"><div class="panel-head"><div><h2>Included liabilities</h2><p>What you owe.</p></div><strong class="debt-total" id="debtTotal"></strong></div><div id="debtsList"></div></section></div>
+          <p class="table-note">Estimates from linked balances — not a tax or accounting statement.</p>
+        </section>
+
+        <section id="settings" class="view">
+          <header class="page-head"><div><p class="eyebrow">Personalize your space</p><h1>Settings</h1><p class="subhead">Your data is stored on this server and scoped to your login.</p></div></header>
+          <section class="settings-card"><h2>Signed in</h2><p id="settingsUser"></p><button class="quiet-button" data-action="logout">Sign out</button></section>
+          <section class="settings-card"><h2>Bank data providers</h2><div id="providerStatus"></div></section>
+          <section class="settings-card"><h2>Category rules</h2><p>Rules set the category of newly imported transactions from a merchant. They never rewrite existing history.</p><div id="rulesList"></div></section>
+          <section class="settings-card"><h2>Sample data</h2><p>Load clearly labelled synthetic accounts and transactions to explore the app before connecting a bank.</p><button class="quiet-button" data-action="load-demo" id="loadDemo">Load sample data</button><button class="quiet-button" data-action="remove-demo" id="removeDemo">Remove sample data</button></section>
+          <section class="settings-card"><h2>Your data</h2><p>Export every transaction as CSV, or disconnect all institutions and permanently delete everything stored for your login.</p><a class="quiet-button" href="/api/export.csv" download>↓ Export CSV</a><button class="danger-button" id="deleteData">Delete all my data…</button></section>
+        </section>
+      </main>
+
+      <nav class="tab-bar" aria-label="Primary navigation">
+        <button class="nav-item active" data-view="overview"><span>⌂</span>Overview</button>
+        <button class="nav-item" data-view="budget"><span>◒</span>Budget</button>
+        <button class="nav-item" data-view="transactions"><span>↕</span>Activity</button>
+        <button class="nav-item" data-view="accounts"><span>▣</span>Accounts</button>
+        <button class="nav-item" data-view="networth"><span>⌁</span>Worth</button>
+      </nav>
+    </div>
+
+    <dialog id="budgetDialog"><form id="budgetForm"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Edit monthly limit</p><h2 id="dialogTitle"></h2><label>Budget amount <div class="currency-input"><span>$</span><input id="budgetAmount" inputmode="decimal" type="number" min="0" step="1" required /></div></label><p class="dialog-hint">The limit applies to every month. Spending totals use posted transactions only.</p><div class="dialog-actions"><button class="quiet-button" type="button" data-close>Cancel</button><button class="primary-button" type="submit">Save budget</button></div></form></dialog>
+    <dialog id="categoryDialog"><form id="categoryForm"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Custom budget category</p><h2>Add category</h2><div class="form-grid"><label>Category name<input id="categoryName" name="name" required maxlength="30" placeholder="e.g. Pet care" /></label><label>Group<input id="categoryGroup" name="group" required maxlength="30" list="categoryGroups" placeholder="e.g. Everyday" /></label><label>Monthly limit<div class="currency-input"><span>$</span><input name="budget" inputmode="decimal" required type="number" min="0" step="1" value="0" /></div></label></div><datalist id="categoryGroups"></datalist><p class="dialog-hint">You can rename, regroup, or delete any category later.</p><div class="dialog-actions"><button class="quiet-button" type="button" data-close>Cancel</button><button class="primary-button" type="submit">Add category</button></div></form></dialog>
+    <dialog id="categoryManagerDialog"><div class="category-manager-form"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Your budget setup</p><h2>Manage categories</h2><p class="dialog-hint">Rename, move, or change the limit for any category. Deleting a category keeps affected transaction records but marks them Uncategorized.</p><div id="categoryManagerList" class="category-manager-list"></div><div class="dialog-actions"><button class="quiet-button" type="button" data-close>Done</button></div></div></dialog>
+    <dialog id="manualTransactionDialog"><form id="manualTransactionForm"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Manual entry</p><h2>Add a transaction</h2><div class="form-grid"><label>Merchant or description<input id="manualMerchant" name="merchant" required maxlength="80" placeholder="e.g. Cash purchase" /></label><label>Date<input id="manualDate" name="date" required type="date" /></label><label>Amount<div class="currency-input"><span>$</span><input id="manualAmount" name="amount" inputmode="decimal" required type="number" min="0.01" step="0.01" /></div></label><label>Type<select name="kind"><option value="expense">Expense</option><option value="income">Income</option></select></label><label>Category<select id="manualCategory" name="category"></select></label><label>Account <input name="account" maxlength="60" placeholder="Manual entry" /></label></div><label class="check-row"><input id="manualBudgetHidden" name="hidden" type="checkbox" /> Keep this transaction out of the budget</label><p class="dialog-hint">Manual entries remain in the transaction history. Expenses affect their category unless you hide them from the budget.</p><div class="dialog-actions"><button class="quiet-button" type="button" data-close>Cancel</button><button class="primary-button" type="submit">Add transaction</button></div></form></dialog>
+    <dialog id="connectDialog"><div class="connect-dialog"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Secure bank connection</p><h2>Connect an institution</h2><p class="dialog-hint">Choose a provider. Your bank credentials are entered only in that provider’s secure flow, never into budge it.</p><button class="provider-option" id="connectPlaid" type="button"><span class="provider-mark plaid-mark">P</span><span><strong>Connect with Plaid</strong><small id="plaidHint"></small></span><b>→</b></button><button class="provider-option" id="connectMx" type="button"><span class="provider-mark mx-mark">MX</span><span><strong>Connect with MX</strong><small id="mxHint"></small></span><b>→</b></button><p id="connectionStatus" class="connection-status" role="status"></p></div></dialog>
+    <dialog id="mxDialog" class="mx-dialog"><div class="mx-frame-wrap"><button class="dialog-close" type="button" id="mxClose" aria-label="Close">×</button><iframe id="mxFrame" title="MX Connect" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="dialog-actions"><button class="primary-button" type="button" id="mxDone">I’m done — import accounts</button></div></div></dialog>
+    <dialog id="deleteDialog"><form id="deleteForm"><button class="dialog-close" type="button" data-close aria-label="Close">×</button><p class="eyebrow">Permanent</p><h2>Delete all my data</h2><p class="dialog-hint">This disconnects every institution at the provider and deletes all accounts, transactions, budgets, and rules stored here. Your login stays. This cannot be undone.</p><label>Confirm with your password<input name="password" type="password" autocomplete="current-password" required /></label><div class="dialog-actions"><button class="quiet-button" type="button" data-close>Cancel</button><button class="danger-button" type="submit">Delete everything</button></div></form></dialog>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
