@@ -187,6 +187,13 @@ This file records a plan, not implemented code or verified production approval. 
 - Validate Plaid product and institution coverage, then implement the server-side Sandbox flow before considering any live Chase or Capital One data.
 - Implement authentication, token encryption, verified webhooks, idempotent sync jobs, disconnect/deletion, deployment, and the production security baseline described above.
 
+## Deployment status — 2026-11-10
+
+- A dedicated Proxmox LXC for budge it has been created on the user's homelab server (see `/home/danielp/agents/homelab_agent.md`). Intended spec: Debian 13, unprivileged, nesting on, ~2 cores, ~1 GiB RAM, 512 MiB swap, 8–10 GiB disk on `local-lvm`, DHCP on `vmbr0`, start at boot, container firewall enabled. It is CT 102 at `192.168.5.186/22` on the home LAN (`192.168.4.0`–`192.168.7.255`), seen as a DHCP lease on 2026-11-10; an Eero reservation is still to be set. Final sizes were not confirmed; verify before relying on them.
+- Not done yet: app installed in the container, `.env`/encryption key, systemd service, HTTPS access path (Tailscale / Cloudflare Tunnel / Caddy undecided), backups. Proxmox reports the firewall is still disabled at the datacenter level, so the container firewall is not yet enforcing anything.
+- Discrepancy to resolve: the implementation-status section above describes the earlier static prototype, but the repo now contains a Python server (`server.py`, `budgeit/`, SQLite), `deploy/budgeit.service`, and `deploy/Caddyfile`, documented in `README.md`. Re-verify the codebase and update this file accordingly.
+- Keep live bank data out of the container until backups and the access path are in place.
+
 ## Documentation maintenance rule
 
 When a major plan, scope, architecture, user-facing capability, delivery milestone, or implementation accomplishment is established or changed, update both `agent.md` and `README.md` in the same work session:

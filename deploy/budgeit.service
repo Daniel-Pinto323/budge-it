@@ -1,0 +1,34 @@
+# systemd unit for budge it. Install as /etc/systemd/system/budgeit.service.
+# Expects the code in /opt/budgeit (with a root-owned, budgeit-readable .env) and
+# DATA_DIR=/var/lib/budgeit in that .env. See README "Self-hosting".
+[Unit]
+Description=budge it personal budgeting server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=budgeit
+Group=budgeit
+WorkingDirectory=/opt/budgeit
+ExecStart=/usr/bin/python3 /opt/budgeit/server.py
+Restart=on-failure
+RestartSec=5
+
+# Creates /var/lib/budgeit owned by the service user, mode 0700.
+StateDirectory=budgeit
+StateDirectoryMode=0700
+
+# Sandboxing. Inside an unprivileged Proxmox LXC these need the container's
+# "nesting" feature enabled (the Proxmox default for unprivileged containers).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

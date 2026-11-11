@@ -56,6 +56,13 @@ an `https://` `PUBLIC_URL`.
 The app is one Python process with a SQLite file. It needs an always-on machine,
 a persistent disk, and something in front of it that provides HTTPS.
 
+**Status (2026-11-10):** the Proxmox LXC for budge it has been created on the
+home server (Debian 13, unprivileged, nesting on, DHCP on `vmbr0`, start at boot,
+Proxmox firewall enabled on the container). The app is not installed in it yet,
+and no HTTPS access path (Tailscale, Cloudflare Tunnel, or Caddy) is chosen. The
+Proxmox firewall also still needs to be enabled at the datacenter level for the
+container's firewall to take effect. Step 1 below is done; continue at step 2.
+
 1. **Create a container.** A dedicated unprivileged Debian LXC with 1 core, 512 MB
    RAM and 4 GB disk is plenty. Keep it separate from other services.
 2. **Install.**
