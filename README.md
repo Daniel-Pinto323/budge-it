@@ -1,263 +1,162 @@
 # budge it
 
-A private, self-hosted personal budget and net-worth app. It pulls accounts and
-transactions from your banks through **Plaid**, lets you set monthly
-category budgets, and tracks net worth over time. Bank passwords never touch this
-app: you sign in inside the provider's own flow and the server only holds a
-read-only token, encrypted at rest.
+A private, self-hosted budget and net-worth tracker. One small Python process, one
+SQLite file, and a plain HTML/CSS/JS front end with no build step. It runs on a
+home server, keeps your data on that machine, and works on a phone as a Home Screen
+web app.
 
-- `server.py` — entry point and admin commands
-- `budgeit/` — server: config, SQLite storage, auth, sync, provider adapters, HTTP API
-- `static/` — the browser app (plain HTML/CSS/JS, no build step)
-- `deploy/` — systemd unit, Caddy config, and the auto-update script and timer for self-hosting
-- `tests/` — integration tests against a fake Plaid server
+You can fill it three ways: **import CSV statements**, **add accounts by hand**, or
+**link banks through Plaid** (read-only; your bank password never reaches this app).
 
-## Run it locally
+## What it does
+
+- **Budgets.** Monthly limits per category, with status that turns amber ("Almost
+  there") and red ("Budget hit", "Budget passed!"). Click a category to preview its
+  latest transactions for the month, or click an Overview tile to jump to it.
+- **Activity.** Search and filter every transaction, edit them, add notes (a bank memo
+  carries over), and hide any from your budget with the eye. Transfers such as card
+  payments are hidden from budgets by default.
+- **Auto-categorization.** Merchants are filed by an editable keyword list (Settings),
+  your own "Always" rules, and the bank's category, in that order. Categories you set
+  by hand are never overwritten.
+- **Accounts by type.** Credit cards, bank accounts, investments and loans, each with a
+  total. The type is guessed from the CSV format and can be changed.
+- **Net worth.** Balances from linked accounts, CSV imports and manual accounts
+  (401(k), home, loans) roll up into one history.
+- **Your data stays yours.** Export everything as CSV, or delete it all from Settings.
+
+## Status
+
+- Built and tested end to end: budgeting, activity, CSV import (Chase and Capital One),
+  manual accounts, net worth, Plaid linking and sync, multi-user logins, and
+  self-hosting with automatic updates.
+- Plaid was verified in Sandbox. **Production access is still pending**, so live data
+  currently comes from CSV imports and manual accounts.
+- The experimental MX integration was removed; Plaid is the only provider.
+
+## Quick start
 
 Requires Python 3.10+ and the `cryptography` package.
 
 ```bash
-pip install -r requirements.txt        # or: apt install python3-cryptography
+pip install -r requirements.txt          # or: apt install python3-cryptography
 cp .env.example .env
-python3 server.py generate-key         # paste the output into BUDGEIT_ENCRYPTION_KEY in .env
+python3 server.py generate-key           # paste the output into BUDGEIT_ENCRYPTION_KEY in .env
 python3 server.py create-user you@example.com
 python3 server.py
 ```
 
-Open <http://localhost:8080> and sign in. **Settings → Load sample data** gives you
-synthetic accounts to explore before connecting anything real.
+Open <http://localhost:8080> and sign in. **Settings → Load sample data** adds
+synthetic accounts so you can look around first. Run the tests with
+`python3 -m unittest discover -s tests`.
 
-Run the tests with `python3 -m unittest discover -s tests`.
+## Getting data in
 
-## Connecting banks
+**CSV import** (Accounts → ↑ Import CSV). The format is recognised from the file's
+columns, and re-importing the same account never duplicates transactions.
 
-All provider settings live in `.env`; see `.env.example` for every option.
-
-**Plaid.** Put your `PLAID_CLIENT_ID` and sandbox `PLAID_SECRET` in `.env` and
-connect Plaid's test bank (user `user_good`, password `pass_good`). For real
-accounts, apply for production access in the Plaid Dashboard, complete the OAuth
-registration that banks such as Chase and Capital One require, then set
-`PLAID_ENV=production` with the production secret. To link those banks from a
-phone, also set `PLAID_REDIRECT_URI` to your public URL plus `/` and add the same
-value under Allowed redirect URIs in the Plaid Dashboard.
-
-**Until Plaid is live.** Plaid is the only live provider, and production access is
-still pending. In the meantime the app runs on manual data: import CSV statements
-(Accounts → ↑ Import CSV) and add manual accounts (Net worth). Both are described below.
-
-**Freshness.** Data arrives when the provider has it, not in real time. The server
-re-syncs every `SYNC_INTERVAL_MINUTES` (default 6 hours), on demand from the
-Sync buttons, and immediately on provider webhooks when the server is reachable at
-an `https://` `PUBLIC_URL`.
-
-## Budget and activity details
-
-- **Budget status.** A category turns green ("On track"), amber above 80% ("Almost there"),
-  and red once nothing is left: **"Budget hit"** when spending equals the limit and
-  **"Budget passed!"** when it is over.
-- **Categories in one place.** The Budget page has one **Add / edit categories** button
-  (the ⋯ on a budget row opens the same dialog). Pick **＋ New category** to create one, or
-  choose an existing category from the list to rename it, regroup it, change its limit, or
-  delete it. Typing the name of an existing category while adding is refused with a pointer
-  to the list, so you can't create a near-duplicate by mistake.
-- **Hide from budget (the eye).** Each transaction row ends in an eye: open means it counts
-  toward your budget, crossed-out means hidden. **Transfers are hidden by default** (card
-  payments, moves between your accounts), including ones imported or synced from now on and
-  existing ones. Hidden only affects budgets: transfers still move account balances, so net
-  worth stays correct (money moving between your own accounts nets to zero). Choosing
-  Transfer for a transaction hides it; choosing another category shows it again; the eye
-  always has the final say.
-- **Sync status** (bottom of the sidebar) reports the last successful Plaid sync. With only
-  CSV imports and manual accounts it says "No linked accounts · CSV & manual data only"
-  instead of implying anything synced.
-- **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid;
-  CSV imports, manual accounts and sample data have nothing to sync.
-- **Uncategorized on the Budget page.** The bottom of the Budget page always shows an
-  **Uncategorized** section with the latest five uncategorized transactions for the month
-  (click one to categorize it) and a link to review them all in Activity. When there are
-  none it says so. Overview's "uncategorized transactions" attention item jumps straight
-  there and briefly highlights the section.
-- **Why a category shows "No activity".** The Budget page counts one month, and only posted,
-  non-hidden transactions. Expanding a category now says why something isn't counted: it is
-  in another month (with a button to jump there), pending, hidden, or cancelled out by
-  refunds. Activity has a month filter, and the "View all in Activity" links open it already
-  set to the month you were looking at, so the two pages agree.
-- **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens
-  that category on the Budget page. Clicking any budget row there expands the latest
-  five transactions in that category for the month shown, with a link to see them all
-  in Activity. The ⋯ button still edits the limit.
-- **Recent activity is clickable.** Any transaction row (Overview, a budget preview,
-  or the ✎ in Activity) opens the edit dialog. Manual and CSV transactions can change
-  merchant, date and amount; bank-synced ones keep those read-only because every sync
-  rewrites them, but their category, notes and budget visibility are editable.
-- **Notes.** Every transaction has a notes field (up to 500 characters). A Chase CSV's
-  Memo column is carried into it on import; you can add or edit notes on any
-  transaction, and syncs and re-imports never overwrite them. Notes appear under the
-  merchant, are searchable, and are included in the CSV export.
-
-## Manual data while a provider is unavailable
-
-**Account types.** The Accounts tab is grouped into **Credit cards**, **Bank
-accounts**, **Investments** and **Loans & other**, each with its own total. When you
-import a CSV the type is assumed from the file's columns and shown in the dialog
-("Detected: …") so you can change it before importing; afterwards every account has a
-**Type** dropdown (CSV, manual, and Plaid accounts alike, so a provider's
-guess can be corrected and the sync will not undo it). The type decides which section the account appears in.
-
-| File | Columns that identify it | Assumed type |
+| File | Identifying columns | Treated as |
 |---|---|---|
 | Chase card activity | `Transaction Date, Post Date, Description, Category, Type, Amount, Memo` | Credit card |
 | Capital One credit card | `Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit` | Credit card |
-| Capital One checking / savings | `Account Number, Transaction Description, Transaction Date, Transaction Type, Transaction Amount, Balance` | Bank account (savings if the name says so) |
+| Capital One checking / savings | `Account Number, Transaction Description, Transaction Date, Transaction Type, Transaction Amount, Balance` | Bank account |
 
-No investment export format is recognised yet; choose **Investment** by hand
-(or add the account under Net worth → Manual accounts).
+**Balances.** A CSV account's balance is a known balance on a date plus the
+transactions dated after it. Capital One bank files include a `Balance` column, so
+that is automatic. Card files do not, so press **Set current balance** once per card;
+until then it shows an estimate from the imported rows alone. Each account is
+computed from its own file, so import each card's own statement to see its payments.
+Only CSV accounts work this way; Plaid accounts keep the balances Plaid reports.
 
-**Import CSVs** (Accounts → ↑ Import CSV). The three formats above are recognised by
-their column headers. Re-importing the same
-account skips rows already imported. Categories are guessed from the merchant text
-using the keyword list in **Settings → Auto-categorization keywords** (editable);
-categories you set yourself are never overwritten. Imported CSV rows can be edited
-(merchant, date, amount, category) from the Activity page.
+**Manual accounts** (Net worth, or Accounts → + Manual account) cover anything with no
+feed. Update the amount whenever it changes; each value is kept in the history.
 
-**Balances follow the transactions.** Each CSV account's balance is
-`anchor + transactions dated after the anchor date`, and it feeds net worth like
-any other account:
+**Plaid.** Put `PLAID_CLIENT_ID` and a sandbox `PLAID_SECRET` in `.env` and link
+Plaid's test bank (`user_good` / `pass_good`). For real banks, apply for production
+access, complete the OAuth registration banks like Chase and Capital One require, then
+set `PLAID_ENV=production`. To link from a phone, also set `PLAID_REDIRECT_URI` to your
+public URL plus `/` and add it under Allowed redirect URIs in the Plaid Dashboard.
+Data arrives on a timer (`SYNC_INTERVAL_MINUTES`, default 6 hours), on the Sync
+buttons, and on webhooks when the server is reachable at an `https://` `PUBLIC_URL`.
 
-- A **Capital One bank** file carries a `Balance` column, so its newest row anchors the
-  account automatically.
-- A **Chase** or **Capital One card** file has no balance. Until you press **Set current
-  balance** (enter what your card app shows, whether you owe it, and the date), the
-  card shows an estimate from imported transactions only. After that, only transactions dated after your date
-  move it. Spending lowers a balance; refunds and payments raise it.
-- **Card payments** come from the card's own export (for example Chase's "Payment"
-  rows, or Capital One's `Payment/Credit` rows). They raise the card's balance and are
-  filed under Transfer so they do not count as spending. The app does not look at
-  withdrawals in your bank account to work out card payments, so you only need to
-  import each card's own file.
-- Only **CSV-imported** accounts work this way. Plaid accounts keep the
-  balances their provider reports.
-- Manual transactions are not tied to an account yet, so they do not move any
-  balance.
+## Self-hosting
 
-**Manual accounts** (Net worth → Manual accounts) track things no provider links,
-such as a 401(k), home or loan. Enter the amount whenever it changes; each value is
-kept in the net worth history.
+### How the maintainer hosts it
 
-## Self-hosting (for example in a Proxmox container)
+This repository is deployed on a home server as follows:
 
-The app is one Python process with a SQLite file. It needs an always-on machine,
-a persistent disk, and something in front of it that provides HTTPS.
+- **Where.** A dedicated unprivileged Debian 13 LXC container on Proxmox (nesting on,
+  start at boot, container firewall on), running only this app.
+- **How it runs.** The code lives in `/opt/budgeit` and runs as the `budgeit` systemd
+  service under a locked-down system user (`deploy/budgeit.service`). The database is
+  in `/var/lib/budgeit`; `.env` is root-owned and readable only by that user. The only
+  dependency is the Debian package `python3-cryptography`.
+- **Access.** Private, through **Tailscale**. The app listens on `127.0.0.1:8080` and
+  `tailscale serve` publishes it over HTTPS to the maintainer's own devices. Nothing is
+  exposed to the internet, which also means Plaid webhooks cannot reach it, so data
+  refreshes on the timer. Getting Tailscale working inside an unprivileged LXC took
+  three steps: pass `/dev/net/tun` through to the container in Proxmox, run
+  `tailscale up`, then enable MagicDNS and HTTPS certificates in the Tailscale admin
+  console and run `tailscale serve --bg 8080`. `.env` then has `HOST=127.0.0.1`,
+  `PUBLIC_URL=https://<machine>.<tailnet>.ts.net` and `TRUST_PROXY=1`.
+- **Updates.** Changes are made and tested on a laptop and pushed to GitHub. The
+  server pulls them itself every 10 minutes (see Automatic updates below), using a
+  read-only GitHub deploy key.
+- **Data.** Plaid Sandbox ran cleanly. Until Production access arrives the server holds
+  CSV imports and manual accounts.
+- **Not done yet.** Scheduled off-server backups. Every update takes a local database
+  snapshot first, but a copy that survives losing the container is still to be set up.
 
-**Status (2026-11-11):** this app has been deployed in a Proxmox LXC (Debian 13,
-unprivileged, nesting on, start at boot, container firewall on) under
-`/opt/budgeit` as a systemd service, and is served over HTTPS to the maintainer's
-own devices through **Tailscale** (the "Tailscale only" option in step 5). It uses
-sample data only; no bank is connected yet and backups are not set up.
+### Hosting your own fork
 
-#### Tailscale setup used (unprivileged Proxmox LXC)
+You need an always-on machine (a small VM, a Raspberry Pi, or a container is plenty:
+about 1 core, 512 MB RAM and a few GB of disk) and a way to reach it over HTTPS.
 
-1. On the Proxmox host, give the container the tunnel device: pass through
-   `/dev/net/tun` (Proxmox's device passthrough, or `lxc.cgroup2.devices.allow:
-   c 10:200 rwm` plus `lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file`
-   in `/etc/pve/lxc/<id>.conf`), then fully stop and start the container. The host
-   must have `/dev/net/tun` (run `modprobe tun` if not).
-2. Inside the container, install Tailscale and join the tailnet:
-   `tailscale up --hostname=budgeit`.
-3. In the Tailscale admin console's DNS page, enable **MagicDNS** and
-   **HTTPS Certificates**. (Issued certificates list the machine name in public
-   certificate-transparency logs.)
-4. Run `tailscale serve --bg 8080`. Tailscale now answers HTTPS on port 443 and
-   forwards to the app.
-5. In `.env`, set `HOST=127.0.0.1`, keep `PORT=8080`, set
-   `PUBLIC_URL=https://budgeit.<tailnet>.ts.net` and `TRUST_PROXY=1`, then
-   `systemctl restart budgeit`. The plain-HTTP LAN address stops working, and the
-   container's firewall rule for port 8080 is no longer needed.
-6. Install Tailscale on every device that should reach the app (laptop, iPhone)
-   and sign in to the same account. A device must have Tailscale connected to
-   open the app, at home or away.
-
-Because the app is private to the tailnet, provider webhooks cannot reach it;
-data refreshes on the periodic sync and the Sync buttons. For Plaid OAuth banks,
-confirm at registration that a `*.ts.net` redirect URI is accepted, or use a
-Cloudflare Tunnel instead.
-
-1. **Create a container.** A dedicated unprivileged Debian LXC with 1 core, 512 MB
-   RAM and 4 GB disk is plenty. Keep it separate from other services.
+1. **Fork and clone.** Fork this repo and clone it to the server, for example into
+   `/opt/budgeit`. For a private fork, add a read-only deploy key to the repo.
 2. **Install.**
    ```bash
    apt install python3 python3-cryptography git
    useradd --system --home /opt/budgeit --shell /usr/sbin/nologin budgeit
-   git clone <your repo> /opt/budgeit
    cp /opt/budgeit/.env.example /opt/budgeit/.env
    chown root:budgeit /opt/budgeit/.env && chmod 640 /opt/budgeit/.env
    ```
-3. **Configure `/opt/budgeit/.env`.** Set `BUDGEIT_ENCRYPTION_KEY`
-   (`python3 server.py generate-key`), `DATA_DIR=/var/lib/budgeit`,
-   `PUBLIC_URL=https://your-hostname`, `TRUST_PROXY=1`, and your provider keys.
-   Leave `HOST=127.0.0.1`.
-4. **Start the service.**
+3. **Configure `.env`.** Set `BUDGEIT_ENCRYPTION_KEY` (from `python3 server.py
+   generate-key`; back it up separately from the database), `DATA_DIR=/var/lib/budgeit`,
+   `PUBLIC_URL`, `TRUST_PROXY=1`, and your Plaid keys if you have them. Leave
+   `HOST=127.0.0.1`.
+4. **Run it as a service.**
    ```bash
    cp /opt/budgeit/deploy/budgeit.service /etc/systemd/system/
    systemctl daemon-reload && systemctl enable --now budgeit
    cd /opt/budgeit && runuser -u budgeit -- python3 server.py create-user you@example.com
    ```
-   Add more people later with the same `create-user` command; each login only
-   sees its own data.
-5. **Put HTTPS in front.** Pick one:
-   - **Cloudflare Tunnel** (no open ports, hides your home IP, works behind
-     CGNAT): run `cloudflared` in the container pointing at
-     `http://127.0.0.1:8080`. Optionally add Cloudflare Access in front of
-     everything except `/api/webhooks/*`.
-   - **Port forwarding + Caddy**: forward ports 80 and 443 from your router to the
-     container and use `deploy/Caddyfile`. Needs a public IP and DNS (dynamic DNS
-     if your IP changes).
-   - **Tailscale only** (not public): reach the app from your own devices over
-     your tailnet. No webhooks, so data refreshes on the periodic sync.
-6. **Tell the providers your URL.** Plaid: add the redirect URI (webhooks are
-   registered automatically).
+   The unit assumes `/opt/budgeit` and `/var/lib/budgeit`; edit it if you use other
+   paths. Each login only sees its own data, so you can add family with `create-user`.
+5. **Put HTTPS in front** (the app itself speaks plain HTTP on loopback). Choose one:
 
-### Backups
+   | Option | Good for | Notes |
+   |---|---|---|
+   | **Tailscale** (`tailscale serve`) | Private use from your own devices | No open ports; no webhooks |
+   | **Cloudflare Tunnel** | Reaching it from anywhere without open ports | Works behind CGNAT; consider Cloudflare Access, leaving `/api/webhooks/*` open |
+   | **Caddy + port forwarding** | A public hostname you control | Uses `deploy/Caddyfile`; needs a public IP and DNS |
 
-Everything is in `DATA_DIR/budgeit.sqlite3` plus the encryption key in `.env`.
-Back up both, and keep at least one copy off the server:
+6. **Tell Plaid your URL.** Add your redirect URI in the Plaid Dashboard. Webhooks are
+   registered automatically when `PUBLIC_URL` is `https://`.
 
-```bash
-sqlite3 /var/lib/budgeit/budgeit.sqlite3 ".backup '/root/budgeit-$(date +%F).sqlite3'"
-```
+### Automatic updates
 
-A Proxmox container backup captures both at once; encrypt it if it leaves the
-house, since it holds the key and the data together. Without the key, the Plaid
-tokens in a restored database are unreadable and each bank must be relinked.
+A systemd timer can keep the server on the latest commit of a branch. Every 10 minutes
+`deploy/budgeit-update` does this:
 
-### Updating
+1. Fetch the branch (default `main`); stop quietly if nothing is new.
+2. Fast-forward the checkout, never merging or rewriting history.
+3. Run the test suite. **If anything fails, roll back and leave the running app alone.**
+4. Copy the database to `/var/backups/budgeit/` (newest 10 kept), because new code may
+   upgrade the schema on start-up and that cannot be undone.
+5. Restart `budgeit`.
 
-Manually:
-
-```bash
-cd /opt/budgeit && git pull --ff-only && systemctl restart budgeit
-```
-
-#### Automatic updates (home server pulls from GitHub)
-
-The workflow is: edit and test on the laptop, push to `main`, and the server picks
-the change up on its own within about ten minutes. A systemd timer runs
-`deploy/budgeit-update` every 10 minutes (and 2 minutes after boot). Each run:
-
-1. `git fetch`es `main`. If there is nothing new it exits silently.
-2. Fast-forwards the checkout (`git merge --ff-only`; it never rewrites history
-   or merges, so a diverged server checkout is an error, not a surprise).
-3. Runs the test suite. **If any test fails, the checkout is rolled back to the
-   previous commit and the running app is left alone.**
-4. Copies the database to `/var/backups/budgeit/pre-update-<time>-<old commit>.sqlite3`
-   (mode `0600`, newest 10 kept) because new code may upgrade the schema on
-   startup and that cannot be undone. This is a same-machine safety net, not an
-   off-server backup; see Backups above.
-5. Restarts the `budgeit` service.
-
-`.env` and the database are untracked, so they survive updates.
-
-**Install (once, as root on the server):**
+Install it once as root on the server:
 
 ```bash
 cd /opt/budgeit
@@ -266,56 +165,59 @@ cp deploy/budgeit-update.service deploy/budgeit-update.timer /etc/systemd/system
 systemctl daemon-reload && systemctl enable --now budgeit-update.timer
 ```
 
-The checkout needs `git fetch` to work as root, so the GitHub deploy key (or a
-public HTTPS remote) must be usable by root. If git reports "dubious ownership",
-run `git config --global --add safe.directory /opt/budgeit`. The script itself
-only changes when you reinstall it; after pulling a change to
-`deploy/budgeit-update`, rerun the `install` line.
-
-**Operating it:**
+Root runs the fetch, so your deploy key (or a public HTTPS remote) must work for root;
+if git complains about "dubious ownership", run `git config --global --add safe.directory
+/opt/budgeit`. Re-run the `install` line after pulling a change to the script itself.
 
 ```bash
 systemctl list-timers budgeit-update.timer     # next and last run
-systemctl start budgeit-update.service         # check for updates right now
-journalctl -u budgeit-update -n 50             # what happened (updates, test failures)
-systemctl disable --now budgeit-update.timer   # turn auto-updates off
+systemctl start budgeit-update.service         # check now
+journalctl -u budgeit-update -n 50             # what happened
+systemctl disable --now budgeit-update.timer   # turn it off
 ```
 
-**Settings** (environment variables, set with `systemctl edit budgeit-update.service`
-and an `[Service]` / `Environment=` line): `BRANCH` (default `main`; set it to a
-`release` branch and push there only when a change is ready, if you do not want
-every push to go live), `APP_DIR`, `DATA_DIR`, `BACKUP_DIR`, `KEEP_BACKUPS`.
+To avoid every push going live, set `BRANCH=release` (via `systemctl edit
+budgeit-update.service`) and push to that branch only when a change is ready. Other
+variables: `APP_DIR`, `DATA_DIR`, `BACKUP_DIR`, `KEEP_BACKUPS`. A failing update retries
+every 10 minutes until you push a fix. The script cannot install dependencies; if
+`requirements.txt` gains one it logs a note and you install the package yourself. To
+roll back a release that passed the tests, `git reset --hard <good commit>` on the
+server and push a revert to the followed branch.
 
-**Limits to know about:** a failed update keeps retrying every 10 minutes and
-logs the test output each time until you push a fix. Dependencies are the Debian
-packages from step 2 of the install; if a change to `requirements.txt` adds one,
-the script logs a note and you must `apt install` it yourself, or the restarted
-app will fail to start. To roll back a bad release that passed the tests, `git
-reset --hard <good commit>` on the server and (so it does not move forward again)
-push a revert to the branch the server follows. To restore data, stop the service
-and copy a backup over `/var/lib/budgeit/budgeit.sqlite3`.
+### Backups
 
-## Security notes
+Everything lives in `DATA_DIR/budgeit.sqlite3` plus the encryption key in `.env`. Back
+up both and keep a copy off the machine:
 
-- Logins use scrypt-hashed passwords (12+ characters), rate-limited sign-in,
-  HttpOnly session cookies and CSRF tokens. There is no two-factor login yet, so
-  if the app is on the public internet use a long unique password, and consider
-  an access proxy in front.
-- Plaid access tokens are encrypted with `BUDGEIT_ENCRYPTION_KEY`. Plaid webhooks
-  are signature-verified.
-- Only the Plaid access tokens are encrypted at rest. Transactions, balances and
-  account names are stored as plain SQLite rows, protected by file permissions
-  (`0600`), the container boundary and private network access. Treat the database
-  file and any backup of it as sensitive, and encrypt copies that leave the server.
-- Connections are read-only. The app cannot move money.
+```bash
+sqlite3 /var/lib/budgeit/budgeit.sqlite3 ".backup '/root/budgeit-$(date +%F).sqlite3'"
+```
 
-### Planned hardening (not implemented)
+A hypervisor snapshot of the whole container also captures both; encrypt it if it
+leaves your home, since the key and the data sit together. Without the key, saved Plaid
+tokens cannot be read and each bank has to be relinked. To restore, stop the service and
+copy a backup over `budgeit.sqlite3`.
 
-Possible future improvements to data protection, roughly in priority order:
-encrypted backups, full-disk (LUKS) or encrypted-volume storage for the data
-directory, an encrypted SQLite database (SQLCipher), field-level encryption of
-sensitive columns, better key management and rotation (the encryption key is
-currently a plain value in `.env`), and two-factor sign-in. See `agent.md` for the
-trade-offs.
-- **Settings → Delete all my data** revokes every connection at the provider and
-  wipes your records.
+## Security
+
+- Passwords are scrypt-hashed (12+ characters); sign-in is rate-limited; sessions use
+  HttpOnly cookies with CSRF tokens. There is no two-factor login yet, so on the public
+  internet use a long unique password and consider an access proxy.
+- Plaid access tokens are encrypted with `BUDGEIT_ENCRYPTION_KEY`, and Plaid webhooks
+  are signature-verified. Connections are read-only; the app cannot move money.
+- Only the Plaid tokens are encrypted at rest. Transactions, balances and account names
+  are plain SQLite rows protected by file permissions (`0600`), the container boundary
+  and private network access. Treat the database and its backups as sensitive.
+- **Settings → Delete all my data** revokes every Plaid connection and wipes your records.
+- Not implemented yet: encrypted backups, an encrypted data volume or SQLCipher,
+  encryption key rotation, and two-factor sign-in. `agent.md` discusses the trade-offs.
+
+## Project layout
+
+- `server.py`: entry point and admin commands (`generate-key`, `create-user`)
+- `budgeit/`: server code (config, SQLite storage and migrations, auth, sync, CSV import,
+  balances, Plaid adapter, HTTP API)
+- `static/`: the browser app
+- `deploy/`: systemd units, Caddy config, and the auto-update script and timer
+- `tests/`: end-to-end tests against a fake Plaid server
+- `agent.md`: the project plan and detailed implementation status
