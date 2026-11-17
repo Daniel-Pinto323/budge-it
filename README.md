@@ -1,7 +1,7 @@
 # budge it
 
 A private, self-hosted personal budget and net-worth app. It pulls accounts and
-transactions from your banks through **Plaid** and/or **MX**, lets you set monthly
+transactions from your banks through **Plaid**, lets you set monthly
 category budgets, and tracks net worth over time. Bank passwords never touch this
 app: you sign in inside the provider's own flow and the server only holds a
 read-only token, encrypted at rest.
@@ -41,10 +41,11 @@ registration that banks such as Chase and Capital One require, then set
 phone, also set `PLAID_REDIRECT_URI` to your public URL plus `/` and add the same
 value under Allowed redirect URIs in the Plaid Dashboard.
 
-**MX.** Put your `MX_CLIENT_ID` and `MX_API_KEY` in `.env`. The default base URL is
-MX's integration (test) environment. Production access needs an agreement with MX
-and your server's IP on their allowlist. The MX adapter has only been run against
-a fake server so far; expect to adjust it on first contact with the real API.
+**Other providers.** Plaid is the only supported provider. The code includes an
+experimental MX adapter (`MX_CLIENT_ID`, `MX_API_KEY` in `.env`), but it has only
+been run against a fake server, MX production access requires an agreement with
+MX, and it is out of scope for this project. Treat it as a possible future
+backup, not a working feature.
 
 **Freshness.** Data arrives when the provider has it, not in real time. The server
 re-syncs every `SYNC_INTERVAL_MINUTES` (default 6 hours), on demand from the
@@ -122,8 +123,7 @@ Cloudflare Tunnel instead.
    - **Tailscale only** (not public): reach the app from your own devices over
      your tailnet. No webhooks, so data refreshes on the periodic sync.
 6. **Tell the providers your URL.** Plaid: add the redirect URI (webhooks are
-   registered automatically). MX: set the webhook URL to
-   `https://your-hostname/api/webhooks/mx` with the Basic credentials from `.env`.
+   registered automatically).
 
 ### Backups
 
@@ -151,7 +151,7 @@ cd /opt/budgeit && git pull && systemctl restart budgeit
   if the app is on the public internet use a long unique password, and consider
   an access proxy in front.
 - Plaid access tokens are encrypted with `BUDGEIT_ENCRYPTION_KEY`. Plaid webhooks
-  are signature-verified; MX webhooks require HTTP Basic credentials.
+  are signature-verified.
 - Only the Plaid access tokens are encrypted at rest. Transactions, balances and
   account names are stored as plain SQLite rows, protected by file permissions
   (`0600`), the container boundary and private network access. Treat the database
