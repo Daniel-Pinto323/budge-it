@@ -186,6 +186,17 @@ CHASE_CSV = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
 ])
 
 
+CAPONE_CSV = """Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance
+9405,Withdrawal from SCHWAB BANK TRANSFER,11/16/26,Debit,500,5855.55
+9405,Zelle money sent to A PERSON,11/15/26,Debit,130,6355.55
+9405,"Withdrawal from WageWorks, Inc WEB PMTS",11/03/26,Debit,79.4,6302.2
+9405,Deposit from CAPITAL ONE SERV PAYROLL,11/01/26,Credit,16.88,6500.00
+9405,LYFT *RIDE SAT 9PM,10/30/26,Debit,18.20,6483.12
+9405,DIVVY 1234,10/29/26,Debit,4.50,6501.32
+9405,UBER EATS HELP.UBER.COM,10/28/26,Debit,22.00,6505.82
+"""
+
+
 class Client:
     def __init__(self, base: str) -> None:
         self.base, self.cookie, self.csrf = base, "", ""
@@ -406,7 +417,7 @@ class IntegrationTest(unittest.TestCase):
     def test_35_csv_import_is_idempotent_and_signed_correctly(self):
         body = {"csv": CHASE_CSV, "account": "Chase 0986", "mask": "0986"}
         status, payload, _ = self.client.request("POST", "/api/import/csv", body)
-        self.assertEqual((status, payload["import"]), (200, {"added": 14, "skipped": 0}))
+        self.assertEqual((status, payload["import"]), (200, {"added": 14, "skipped": 0, "recategorized": 0}))
         rows = [t for t in payload["state"]["transactions"] if t["account"] == "Chase 0986 ••0986"]
         self.assertEqual(len(rows), 14)
         sale = next(t for t in rows if t["merchant"] == "UBER EATS" and t["date"] == "2026-11-09")
@@ -414,7 +425,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual((sale["amount"], sale["category"]), (1109, "Dining"))
         self.assertEqual(refund["amount"], -993)
         again = self.client.request("POST", "/api/import/csv", body)[1]
-        self.assertEqual(again["import"], {"added": 0, "skipped": 14})
+        self.assertEqual(again["import"], {"added": 0, "skipped": 14, "recategorized": 0})
         self.assertEqual(self.client.request("POST", "/api/import/csv", {**body, "csv": "a,b\n1,2"})[0], 400)
         edit = {"merchant": "Uber Eats lunch", "date": "2026-11-08", "amount": 1250, "kind": "expense", "category": "Fun money"}
         self.assertEqual(self.client.request("PATCH", f"/api/transactions/{sale['id']}", edit)[0], 200)
@@ -427,6 +438,44 @@ class IntegrationTest(unittest.TestCase):
         self.client.request("POST", "/api/sync", {})  # must not try to sync csv connections
         csv_conn = next(c for c in self.state()["connections"] if c["provider"] == "csv")
         self.assertEqual(csv_conn["status"], "healthy")
+
+    def test_36_capital_one_checking_import(self):
+        body = {"csv": CAPONE_CSV, "account": "360 Checking", "mask": "9405"}
+        status, payload, _ = self.client.request("POST", "/api/import/csv", body)
+        self.assertEqual((status, payload["import"]), (200, {"added": 7, "skipped": 0, "recategorized": 0}))
+        rows = {t["merchant"]: t for t in payload["state"]["transactions"] if t["account"] == "360 Checking ••9405"}
+        self.assertEqual(rows["Zelle money sent to A PERSON"]["amount"], 13000)
+        self.assertEqual(rows["Deposit from CAPITAL ONE SERV PAYROLL"]["amount"], -1688)
+        self.assertEqual(rows["Deposit from CAPITAL ONE SERV PAYROLL"]["category"], "Income")
+        self.assertEqual(rows["Withdrawal from SCHWAB BANK TRANSFER"]["category"], "Transfer")
+        self.assertEqual(rows["Zelle money sent to A PERSON"]["category"], "Zelle")
+        self.assertIn("Zelle", [c["name"] for c in payload["state"]["categories"]])
+        self.assertEqual([rows[m]["category"] for m in ("LYFT *RIDE SAT 9PM", "DIVVY 1234", "UBER EATS HELP.UBER.COM")],
+                         ["Transportation", "Transportation", "Dining"])
+        self.assertIn("Withdrawal from WageWorks, Inc WEB PMTS", rows)
+        account = next(a for a in payload["state"]["accounts"] if a["name"] == "360 Checking")
+        self.assertEqual((account["kind"], account["balance_cents"], account["included"]), ("depository", 585555, True))
+        self.assertEqual(self.client.request("POST", "/api/import/csv", body)[1]["import"], {"added": 0, "skipped": 7, "recategorized": 0})
+
+    def test_37_keyword_rules_are_manageable(self):
+        state = self.state()
+        self.assertTrue(any(r["keyword"] == "uber eats" and r["category"] == "Dining" for r in state["keyword_rules"]))
+        status, payload, _ = self.client.request("POST", "/api/keyword-rules", {"keyword": " Divvy ", "category": "Fun money"})
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(payload["applied"], 1)  # existing imported Divvy row follows the new rule
+        divvy = next(t for t in payload["state"]["transactions"] if t["merchant"] == "DIVVY 1234")
+        self.assertEqual(divvy["category"], "Fun money")
+        rule = next(r for r in payload["state"]["keyword_rules"] if r["keyword"] == "divvy")
+        self.assertEqual(self.client.request("POST", "/api/keyword-rules", {"keyword": "x", "category": "Dining"})[0], 400)
+        self.assertEqual(self.client.request("POST", "/api/keyword-rules", {"keyword": "divvy", "category": "Nope"})[0], 400)
+        # A user's own choice is never overwritten by rules.
+        self.client.request("PATCH", f"/api/transactions/{divvy['id']}", {"category": "Dining"})
+        self.client.request("PATCH", f"/api/keyword-rules/{rule['id']}", {"category": "Transportation"})
+        self.assertEqual(next(t for t in self.state()["transactions"] if t["id"] == divvy["id"])["category"], "Dining")
+        self.assertEqual(self.client.request("DELETE", f"/api/keyword-rules/{rule['id']}", {})[0], 200)
+        self.assertFalse(any(r["keyword"] == "divvy" for r in self.state()["keyword_rules"]))
+        self.assertEqual(self.client.request("POST", "/api/keyword-rules/reset", {})[0], 200)
+        self.assertTrue(any(r["keyword"] == "divvy" for r in self.state()["keyword_rules"]))
 
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()

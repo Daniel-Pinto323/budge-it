@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE users (
@@ -103,6 +103,13 @@ CREATE TABLE category_rules (
     category TEXT NOT NULL,
     UNIQUE (user_id, match)
 );
+CREATE TABLE keyword_rules (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL,               -- lower-cased; matches anywhere in the merchant text
+    category TEXT NOT NULL,
+    UNIQUE (user_id, keyword)
+);
 CREATE TABLE balance_snapshots (
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     day TEXT NOT NULL,
@@ -142,9 +149,44 @@ def init(path: Path) -> None:
     if version == 0:
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    elif version == 1:
+        _migrate_1_to_2(conn)
     elif version != SCHEMA_VERSION:
         raise SystemExit(f"Database schema version {version} is not supported by this build.")
     path.chmod(0o600)
+
+
+def seed_keyword_rules(conn: sqlite3.Connection, user_id: int) -> None:
+    """Give a user the default keyword rules, creating the Zelle category if they lack one."""
+    from . import keywords
+    if not conn.execute("SELECT 1 FROM categories WHERE user_id = ? AND name = 'Zelle'", (user_id,)).fetchone():
+        position = conn.execute("SELECT COUNT(*) FROM categories WHERE user_id = ?", (user_id,)).fetchone()[0]
+        conn.execute("INSERT INTO categories (id, user_id, name, grp, color, budget_cents, position) VALUES (?,?,?,?,?,0,?)",
+                     (new_id(), user_id, "Zelle", "Everyday", "#7a6fb0", position))
+    names = {row[0] for row in conn.execute("SELECT name FROM categories WHERE user_id = ?", (user_id,))}
+    for category, words in keywords.DEFAULTS.items():
+        if category in names or category in ("Transfer", "Income"):
+            for word in words:
+                conn.execute("INSERT OR IGNORE INTO keyword_rules (id, user_id, keyword, category) VALUES (?,?,?,?)",
+                             (new_id(), user_id, word, category))
+
+
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("""CREATE TABLE keyword_rules (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            keyword TEXT NOT NULL,
+            category TEXT NOT NULL,
+            UNIQUE (user_id, keyword))""")
+        for row in conn.execute("SELECT id FROM users").fetchall():
+            seed_keyword_rules(conn, row[0])
+        conn.execute("PRAGMA user_version = 2")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 def connect() -> sqlite3.Connection:

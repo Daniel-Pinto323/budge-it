@@ -407,7 +407,47 @@ function renderWorth() {
   $('#debtsList').innerHTML = rows(worth.debts, true);
 }
 
+function matchKeyword(text) {
+  const lowered = text.toLowerCase();
+  let best = null;
+  for (const rule of state.keyword_rules) {
+    if (lowered.includes(rule.keyword) && (!best || rule.keyword.length > best.keyword.length)) best = rule;
+  }
+  return best;
+}
+
+function renderKeywords() {
+  const names = categoryNames();
+  const select = $('#keywordCategory');
+  const chosen = select.value;
+  select.innerHTML = names.map(name => `<option>${esc(name)}</option>`).join('');
+  if (names.includes(chosen)) select.value = chosen;
+  const query = $('#keywordFilter').value.trim().toLowerCase();
+  const counts = new Map();
+  for (const t of state.transactions) {
+    const rule = matchKeyword(t.merchant);
+    if (rule) counts.set(rule.id, (counts.get(rule.id) || 0) + 1);
+  }
+  const groups = new Map();
+  for (const rule of state.keyword_rules) {
+    if (query && !rule.keyword.includes(query) && !rule.category.toLowerCase().includes(query)) continue;
+    if (!groups.has(rule.category)) groups.set(rule.category, []);
+    groups.get(rule.category).push(rule);
+  }
+  $('#keywordRules').innerHTML = [...groups].map(([category, rules]) => `<div class="keyword-group"><h3>${esc(category)} <small>${rules.length} keyword${rules.length === 1 ? '' : 's'}${names.includes(category) ? '' : ' · category no longer exists'}</small></h3>${rules.map(rule => `<span class="keyword-chip">${esc(rule.keyword)}${counts.get(rule.id) ? ` <small>${counts.get(rule.id)}</small>` : ''}<button type="button" data-delete-keyword="${esc(rule.id)}" aria-label="Remove ${esc(rule.keyword)}">×</button></span>`).join('')}</div>`).join('')
+    || `<p class="empty-note">${state.keyword_rules.length ? 'No keywords match that filter.' : 'No keyword rules yet. Add one above.'}</p>`;
+  renderKeywordTest();
+}
+
+function renderKeywordTest() {
+  const text = $('#keywordTest').value.trim();
+  const rule = text && matchKeyword(text);
+  $('#keywordTestResult').textContent = !text ? 'Numbers next to a keyword are how many of your transactions it matches.'
+    : rule ? `“${text}” → ${rule.category} (matched “${rule.keyword}”)` : `“${text}” matches no keyword, so it would stay Uncategorized (or use the bank’s category).`;
+}
+
 function renderSettings() {
+  renderKeywords();
   $('#rulesList').innerHTML = state.rules.map(rule => `<div class="rule-row"><span><strong>${esc(rule.match)}</strong> → ${esc(rule.category)}</span><button class="delete-category" type="button" data-delete-rule="${esc(rule.id)}">Remove</button></div>`).join('')
     || '<p class="empty-note">No rules yet. Change a transaction’s category and choose “Always” to create one.</p>';
   $('#loadDemo').hidden = state.has_demo;
@@ -596,10 +636,13 @@ $('#importCsvButton').addEventListener('click', () => {
 });
 $('#importCsvFile').addEventListener('change', event => {
   const file = event.target.files[0];
-  const guess = file && file.name.match(/^([A-Za-z]+)(\d{4})_/);
-  if (guess && !$('#importCsvAccount').value) {
-    $('#importCsvAccount').value = `${guess[1]} ${guess[2]}`;
-    $('#importCsvForm').elements.mask.value = guess[2];
+  if (!file || $('#importCsvAccount').value) return;
+  const chase = file.name.match(/^([A-Za-z]+)(\d{4})_/);
+  const capitalOne = file.name.match(/^\d{4}-\d{2}-\d{2}_(.+?)\.{2,}(\d{4})\.csv$/i);
+  const guess = chase ? [chase[1], chase[2]] : capitalOne ? [capitalOne[1].replace(/([a-z])(?=[A-Z0-9])|(\d)(?=[A-Za-z])/g, '$1$2 '), capitalOne[2]] : null;
+  if (guess) {
+    $('#importCsvAccount').value = chase ? `${guess[0]} ${guess[1]}` : guess[0];
+    $('#importCsvForm').elements.mask.value = guess[1];
   }
 });
 $('#importCsvForm').addEventListener('submit', async event => {
@@ -612,7 +655,7 @@ $('#importCsvForm').addEventListener('submit', async event => {
   const data = await act(() => api('POST', '/api/import/csv', {csv, account: form.elements.account.value.trim(), mask: form.elements.mask.value.trim()}));
   if (data) {
     $('#importCsvDialog').close();
-    toast(`Imported ${data.import.added} transaction${data.import.added === 1 ? '' : 's'}${data.import.skipped ? ` (${data.import.skipped} already imported)` : ''}`);
+    toast(`Imported ${data.import.added} transaction${data.import.added === 1 ? '' : 's'}${data.import.skipped ? ` (${data.import.skipped} already imported)` : ''}${data.import.recategorized ? `, ${data.import.recategorized} recategorized` : ''}`);
   }
 });
 
@@ -752,3 +795,27 @@ document.addEventListener('visibilitychange', () => {
     $('#loginError').hidden = false;
   }
 })();
+
+// --- Keyword rules ------------------------------------------------------------
+
+const appliedNote = data => data.applied ? ` · ${data.applied} existing transaction${data.applied === 1 ? '' : 's'} recategorized` : '';
+$('#keywordForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const keyword = form.elements.keyword.value.trim();
+  const data = await act(() => api('POST', '/api/keyword-rules', {keyword, category: form.elements.category.value}));
+  if (data) { form.elements.keyword.value = ''; toast(`“${keyword.toLowerCase()}” → ${form.elements.category.value}${appliedNote(data)}`); }
+});
+$('#keywordRules').addEventListener('click', event => {
+  const id = event.target.dataset.deleteKeyword;
+  if (id) act(() => api('DELETE', `/api/keyword-rules/${id}`), 'Keyword removed. Already-categorized transactions keep their category.');
+});
+$('#keywordFilter').addEventListener('input', renderKeywords);
+$('#keywordTest').addEventListener('input', renderKeywordTest);
+$('#applyKeywords').addEventListener('click', async () => {
+  const data = await act(() => api('POST', '/api/keyword-rules/apply'));
+  if (data) toast(data.applied ? `${data.applied} transaction${data.applied === 1 ? '' : 's'} recategorized` : 'Everything already matches your rules');
+});
+$('#resetKeywords').addEventListener('click', () => {
+  if (window.confirm('Restore the built-in keyword list? Keywords you added or moved will be removed.')) act(() => api('POST', '/api/keyword-rules/reset'), 'Keyword rules reset to defaults');
+});

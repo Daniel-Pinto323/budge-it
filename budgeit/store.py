@@ -8,7 +8,7 @@ import re
 from datetime import date
 from typing import Any
 
-from . import db, security
+from . import db, keywords, security
 
 SPECIAL_CATEGORIES = ("Uncategorized", "Income", "Transfer")
 COLORS = ["#3d9770", "#5f86ad", "#d3735f", "#c59b48", "#8c77a3", "#608f99", "#4c94a5", "#d29272", "#438260", "#b17d89"]
@@ -23,6 +23,7 @@ DEFAULT_CATEGORIES = [
     ("Goals & fun", "Travel", "#4c94a5", 30000),
     ("Goals & fun", "Fun money", "#d29272", 22000),
     ("Goals & fun", "Gifts", "#b17d89", 20000),
+    ("Everyday", "Zelle", "#7a6fb0", 0),
 ]
 MAX_TRANSACTIONS = 5000
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -90,6 +91,7 @@ def _seed_categories(conn, user_id: int) -> None:
             "INSERT INTO categories (id, user_id, name, grp, color, budget_cents, position) VALUES (?,?,?,?,?,?,?)",
             (db.new_id(), user_id, name, group, color, budget, position),
         )
+    db.seed_keyword_rules(conn, user_id)
 
 
 # --- Read model ----------------------------------------------------------------
@@ -122,6 +124,8 @@ def state(user_id: int) -> dict[str, Any]:
         "WHERE t.user_id = ? ORDER BY t.date DESC, t.created_at DESC LIMIT ?", (user_id, MAX_TRANSACTIONS)
     ).fetchall()
     rules = conn.execute("SELECT id, match, category FROM category_rules WHERE user_id = ? ORDER BY match", (user_id,)).fetchall()
+    keyword_rules = conn.execute(
+        "SELECT id, keyword, category FROM keyword_rules WHERE user_id = ? ORDER BY category, keyword", (user_id,)).fetchall()
     return {
         "categories": [{"id": c["id"], "name": c["name"], "group": c["grp"], "color": c["color"], "budget": c["budget_cents"]}
                        for c in categories],
@@ -134,6 +138,7 @@ def state(user_id: int) -> dict[str, Any]:
             "account": (t["account_label"] or "Manual entry") if t["manual"] or not t["account_name"] else _account_label(t),
         } for t in transactions],
         "rules": [dict(row) for row in rules],
+        "keyword_rules": [dict(row) for row in keyword_rules],
         "net_worth_history": net_worth_history(conn, user_id),
         "special_categories": list(SPECIAL_CATEGORIES),
     }
@@ -196,6 +201,7 @@ def update_category(user_id: int, category_id: str, data: dict[str, Any]) -> Non
         if name != current["name"]:
             conn.execute("UPDATE transactions SET category = ? WHERE user_id = ? AND category = ?", (name, user_id, current["name"]))
             conn.execute("UPDATE category_rules SET category = ? WHERE user_id = ? AND category = ?", (name, user_id, current["name"]))
+            conn.execute("UPDATE keyword_rules SET category = ? WHERE user_id = ? AND category = ?", (name, user_id, current["name"]))
 
 
 def delete_category(user_id: int, category_id: str) -> None:
@@ -207,6 +213,7 @@ def delete_category(user_id: int, category_id: str) -> None:
         conn.execute("UPDATE transactions SET category = 'Uncategorized', category_source = 'user' "
                      "WHERE user_id = ? AND category = ?", (user_id, current["name"]))
         conn.execute("DELETE FROM category_rules WHERE user_id = ? AND category = ?", (user_id, current["name"]))
+        conn.execute("DELETE FROM keyword_rules WHERE user_id = ? AND category = ?", (user_id, current["name"]))
 
 
 # --- Transactions --------------------------------------------------------------
@@ -297,6 +304,68 @@ def delete_rule(user_id: int, rule_id: str) -> None:
         conn.execute("DELETE FROM category_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
 
 
+# --- Keyword rules ---------------------------------------------------------------
+
+def keyword_pairs(conn, user_id: int) -> list[tuple[str, str]]:
+    return [(row["keyword"], row["category"]) for row in
+            conn.execute("SELECT keyword, category FROM keyword_rules WHERE user_id = ?", (user_id,))]
+
+
+def apply_keyword_rules(user_id: int) -> dict[str, int]:
+    """Recategorize existing transactions that still carry an automatic category. Never touches user choices."""
+    with db.tx() as conn:
+        return {"applied": _apply_keyword_rules(conn, user_id)}
+
+
+def _apply_keyword_rules(conn, user_id: int) -> int:
+    rules, names, changed = keyword_pairs(conn, user_id), category_names(conn, user_id), 0
+    stamp = db.now()
+    for row in conn.execute("SELECT id, merchant, category FROM transactions WHERE user_id = ? AND manual = 0 "
+                            "AND category_source = 'provider'", (user_id,)).fetchall():
+        category = keywords.match(rules, row["merchant"])
+        if category in names and category != row["category"]:
+            conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, row["id"]))
+            changed += 1
+    return changed
+
+
+def add_keyword_rule(user_id: int, data: dict[str, Any]) -> dict[str, int]:
+    keyword = _text(data.get("keyword"), "Keyword", 40).lower()
+    if len(keyword) < 2:
+        raise AppError("Keyword must be at least 2 characters.")
+    with db.tx() as conn:
+        if data.get("category") not in category_names(conn, user_id):
+            raise AppError("Unknown category.")
+        if conn.execute("SELECT COUNT(*) FROM keyword_rules WHERE user_id = ?", (user_id,)).fetchone()[0] >= 1000:
+            raise AppError("Keyword rule limit reached.")
+        # Adding an existing keyword moves it to the new category.
+        conn.execute("INSERT INTO keyword_rules (id, user_id, keyword, category) VALUES (?,?,?,?) "
+                     "ON CONFLICT (user_id, keyword) DO UPDATE SET category = excluded.category",
+                     (db.new_id(), user_id, keyword, data["category"]))
+        return {"applied": _apply_keyword_rules(conn, user_id)}
+
+
+def update_keyword_rule(user_id: int, rule_id: str, data: dict[str, Any]) -> dict[str, int]:
+    with db.tx() as conn:
+        if not conn.execute("SELECT 1 FROM keyword_rules WHERE id = ? AND user_id = ?", (rule_id, user_id)).fetchone():
+            raise AppError("Rule not found.", 404)
+        if data.get("category") not in category_names(conn, user_id):
+            raise AppError("Unknown category.")
+        conn.execute("UPDATE keyword_rules SET category = ? WHERE id = ?", (data["category"], rule_id))
+        return {"applied": _apply_keyword_rules(conn, user_id)}
+
+
+def delete_keyword_rule(user_id: int, rule_id: str) -> None:
+    with db.tx() as conn:
+        conn.execute("DELETE FROM keyword_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
+
+
+def reset_keyword_rules(user_id: int) -> None:
+    with db.tx() as conn:
+        conn.execute("DELETE FROM keyword_rules WHERE user_id = ?", (user_id,))
+        db.seed_keyword_rules(conn, user_id)
+
+
 # --- Export and deletion -------------------------------------------------------
 
 def _csv_safe(value: str) -> str:
@@ -320,6 +389,6 @@ def export_csv(user_id: int) -> str:
 def wipe_user_data(user_id: int) -> None:
     """Delete everything except the login itself, then restore starter categories."""
     with db.tx() as conn:
-        for table in ("transactions", "connections", "categories", "category_rules"):
+        for table in ("transactions", "connections", "categories", "category_rules", "keyword_rules"):
             conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         _seed_categories(conn, user_id)

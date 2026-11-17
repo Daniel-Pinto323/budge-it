@@ -15,8 +15,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from . import db
-from .store import AppError, category_names
+from . import db, keywords
+from .store import AppError, category_names, keyword_pairs
 
 MAX_ROWS = 5000
 # Chase category -> this app's default categories. Unmapped ones stay Uncategorized.
@@ -48,37 +48,52 @@ def _cents(value: str) -> int:
     return -cents if negative else cents
 
 
-def parse(text: str) -> list[dict[str, Any]]:
-    """Parse a Chase activity CSV into rows using the app's sign convention (positive = money out)."""
-    reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
+def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Parse either supported export into (kind, rows), using the app's sign convention (positive = money out)."""
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     fields = {(name or "").strip().lower(): name for name in (reader.fieldnames or [])}
-    if any(column not in fields for column in _REQUIRED):
-        raise AppError("This doesn’t look like a card activity export. Expected columns: "
-                       "Transaction Date, Description, Category, Type, Amount.")
+    chase = all(column in fields for column in ("transaction date", "description", "amount"))
+    capital_one = all(column in fields for column in ("transaction description", "transaction date", "transaction type", "transaction amount"))
+    if not (chase or capital_one):
+        raise AppError("Unrecognised CSV. Supported: Chase card activity (Transaction Date, Description, Category, Type, "
+                       "Amount) and Capital One (Transaction Description, Transaction Date, Transaction Type, Transaction Amount).")
     rows: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
     for line in reader:
         get = lambda key: (line.get(fields.get(key, "")) or "").strip()  # noqa: E731
-        if not get("transaction date") and not get("amount"):
+        if not get("transaction date") and not get("transaction amount" if capital_one else "amount"):
             continue
         if len(rows) >= MAX_ROWS:
             raise AppError(f"Files are limited to {MAX_ROWS} transactions.")
-        day, post = _date(get("transaction date")), get("post date")
-        description = get("description")[:120] or "Unknown"
-        # Chase shows card spending as negative; the app stores spending as positive.
-        amount = -_cents(get("amount"))
-        kind = get("type").lower()
-        digest = "|".join((day, post, description, str(amount), get("memo")))
+        day = _date(get("transaction date"))
+        if chase:
+            description, post, memo = get("description"), get("post date"), get("memo")
+            # Chase shows card spending as negative; the app stores spending as positive.
+            amount, category = -_cents(get("amount")), get("category") or None
+            transfer = get("type").lower() == "payment"
+            balance = None
+        else:
+            description, post, memo, category = get("transaction description"), "", get("account number"), None
+            # Capital One amounts are unsigned; the Debit/Credit type gives the direction.
+            magnitude = abs(_cents(get("transaction amount")))
+            amount = magnitude if get("transaction type").lower() == "debit" else -magnitude
+            transfer = False
+            balance = _cents(get("balance")) if get("balance") else None
+        description = description[:120] or "Unknown"
+        digest = "|".join((day, post, description, str(amount), memo))
         seen[digest] = seen.get(digest, 0) + 1
         rows.append({
             "provider_txn_id": hashlib.sha256(f"{digest}#{seen[digest]}".encode()).hexdigest()[:32],
-            "date": day, "merchant": description, "amount_cents": amount,
-            "provider_category": get("category") or None,
-            "transfer": kind == "payment",
+            "date": day, "merchant": description, "amount_cents": amount, "provider_category": category,
+            "transfer": transfer, "balance_cents": balance,
         })
     if not rows:
         raise AppError("No transactions found in that file.")
-    return rows
+    return ("depository" if capital_one else "credit"), rows
+
+
+def parse(text: str) -> list[dict[str, Any]]:
+    return _rows(text)[1]
 
 
 def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
@@ -89,7 +104,7 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
     if not name:
         raise AppError("Account name is required.")
     mask = re.sub(r"\D", "", str(data.get("mask") or ""))[:4] or None
-    rows = parse(text)
+    kind, rows = _rows(text)
     stamp = db.now()
     added = 0
     with db.tx() as conn:
@@ -114,24 +129,47 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
             account_id = account["id"]
         else:
             account_id = db.new_id()
-            # No balance in the export, so keep it out of net worth until the user decides otherwise.
+            # Card exports carry no balance, so keep those out of net worth until the user decides otherwise.
             conn.execute(
                 "INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, mask, "
-                "balance_cents, included) VALUES (?,?,?,?,?,?,?,?,0,0)",
-                (account_id, user_id, connection_id, "csv", name, "credit", "credit card", mask))
+                "balance_cents, included) VALUES (?,?,?,?,?,?,?,?,0,?)",
+                (account_id, user_id, connection_id, "csv", name, kind, "checking" if kind == "depository" else "credit card",
+                 mask, int(kind == "depository" and rows[0]["balance_cents"] is not None)))
+        latest = conn.execute("SELECT MAX(date) AS day FROM transactions WHERE account_id = ?", (account_id,)).fetchone()["day"]
+        keyword_rules = keyword_pairs(conn, user_id)
+        recategorized = 0
         for row in rows:
             rule = rules.get(row["merchant"].lower())
+            keyword = keywords.match(keyword_rules, row["merchant"])
             hint = CATEGORY_HINTS.get((row["provider_category"] or "").lower())
             if rule in names:
                 category, source = rule, "rule"
             elif row["transfer"] and "Transfer" in names:
                 category, source = "Transfer", "provider"
+            elif keyword in names:
+                category, source = keyword, "provider"
             else:
                 category, source = (hint if hint in names else "Uncategorized"), "provider"
-            added += conn.execute(
+            existing = conn.execute("SELECT id, category, category_source FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
+                                    (account_id, row["provider_txn_id"])).fetchone()
+            if existing:
+                # Re-importing refreshes guesses, but never touches a category the user or a rule chose.
+                if existing["category_source"] == "provider" and existing["category"] != category:
+                    conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, existing["id"]))
+                    recategorized += 1
+                continue
+            added += 1
+            conn.execute(
                 "INSERT INTO transactions (id, user_id, account_id, provider_txn_id, date, merchant, amount_cents, currency, "
                 "pending, category, category_source, provider_category, hidden, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?) ON CONFLICT (account_id, provider_txn_id) DO NOTHING",
+                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?)",
                 (db.new_id(), user_id, account_id, row["provider_txn_id"], row["date"], row["merchant"], row["amount_cents"],
-                 category, source, row["provider_category"], stamp, stamp)).rowcount
-    return {"added": added, "skipped": len(rows) - added}
+                 category, source, row["provider_category"], stamp, stamp))
+        # Exports that carry a running balance keep the account's balance current (newest row wins).
+        dated = [row for row in rows if row["balance_cents"] is not None]
+        if dated and (latest is None or max(row["date"] for row in dated) >= latest):
+            newest = max(dated, key=lambda row: row["date"])  # stable: first of the newest day = file's newest row
+            conn.execute("UPDATE accounts SET balance_cents = ?, balance_at = ? WHERE id = ?", (newest["balance_cents"], stamp, account_id))
+            conn.execute("INSERT OR REPLACE INTO balance_snapshots (account_id, day, balance_cents) VALUES (?,?,?)",
+                         (account_id, db.today(), newest["balance_cents"]))
+    return {"added": added, "skipped": len(rows) - added, "recategorized": recategorized}

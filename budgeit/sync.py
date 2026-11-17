@@ -14,7 +14,7 @@ import time
 from datetime import date, timedelta
 from typing import Any
 
-from . import db, security
+from . import db, keywords, security, store
 from .config import Config
 from .providers.base import ProviderError
 from .providers.mx import REAUTH_STATUSES, MxProvider
@@ -222,6 +222,7 @@ class SyncService:
             rules = {row["match"]: row["category"] for row in conn.execute(
                 "SELECT match, category FROM category_rules WHERE user_id = ?", (user_id,))}
             names = category_names(conn, user_id)
+            kw_rules = store.keyword_pairs(conn, user_id)
             placeholders = ",".join("?" * len(account_ids)) or "NULL"
             scope = list(account_ids.values())
             seen: set[str] = set()
@@ -230,7 +231,7 @@ class SyncService:
                 if not account_id or not item["date"]:
                     continue
                 seen.add(item["provider_txn_id"])
-                self._upsert_transaction(conn, user_id, account_id, item, rules, names, placeholders, scope, stamp)
+                self._upsert_transaction(conn, user_id, account_id, item, rules, kw_rules, names, placeholders, scope, stamp)
             for provider_txn_id in removed or []:
                 conn.execute(f"DELETE FROM transactions WHERE provider_txn_id = ? AND account_id IN ({placeholders})",
                              (provider_txn_id, *scope))
@@ -247,7 +248,7 @@ class SyncService:
                 (cursor, stamp, connection_id))
 
     @staticmethod
-    def _upsert_transaction(conn, user_id, account_id, item, rules, names, placeholders, scope, stamp) -> None:
+    def _upsert_transaction(conn, user_id, account_id, item, rules, kw_rules, names, placeholders, scope, stamp) -> None:
         existing = conn.execute("SELECT * FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
                                 (account_id, item["provider_txn_id"])).fetchone()
         hidden = existing["hidden"] if existing else 0
@@ -256,7 +257,9 @@ class SyncService:
         else:
             rule = rules.get(item["merchant"].lower())
             hint = item["hint"] if item["hint"] in names else None
-            category, source = (rule, "rule") if rule in names else (hint or "Uncategorized", "provider")
+            keyword = keywords.match(kw_rules, item["merchant"])
+            category, source = ((rule, "rule") if rule in names
+                                else (keyword, "provider") if keyword in names else (hint or "Uncategorized", "provider"))
             if not existing and item["pending_ref"]:
                 # A posted transaction replacing its pending version keeps the user's edits.
                 previous = conn.execute(
