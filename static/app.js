@@ -191,18 +191,19 @@ function monthSummary(key) {
   for (const t of state.transactions) {
     if (!t.date.startsWith(key) || t.hidden || !isSpending(t)) continue;
     if (t.pending) { if (t.amount > 0) pending += t.amount; continue; }
-    spent += t.amount;
     byCategory.set(t.category, (byCategory.get(t.category) || 0) + t.amount);
     if (t.category === 'Uncategorized') uncategorized += t.amount;
   }
+  // Refunds can outweigh purchases, so a category (and the total) may go negative.
+  for (const net of byCategory.values()) spent += net;
   const budget = state.categories.reduce((total, category) => total + category.budget, 0);
   return {byCategory, spent, pending, uncategorized, budget};
 }
 const hitBudget = (category, spent) => category.budget > 0 && spent >= category.budget;
 function categoryItems(summary) {
   return state.categories.map(category => {
-    const spent = Math.max(0, summary.byCategory.get(category.name) || 0);
-    const ratio = category.budget ? spent / category.budget : (spent ? 2 : 0);
+    const spent = summary.byCategory.get(category.name) || 0;
+    const ratio = category.budget ? spent / category.budget : (spent > 0 ? 2 : 0);
     return {...category, spent, ratio, status: ratio > 1 ? 'over' : hitBudget(category, spent) ? 'hit' : ratio > 0.8 ? 'near' : 'on'};
   });
 }
@@ -321,7 +322,7 @@ function renderOverview() {
   $('#remainingTotal').textContent = remaining >= 0 ? `${money(remaining)} left` : `${money(-remaining)} over`;
 
   const pulse = items.filter(item => item.budget > 0).sort((a, b) => b.ratio - a.ratio).slice(0, 4);
-  $('#overviewBudget').innerHTML = pulse.map(item => `<article class="pulse-item clickable" role="button" tabindex="0" data-pulse="${esc(item.id)}" aria-label="Open ${esc(item.name)} in Budget"><div class="pulse-top"><i class="category-bullet" style="background:${esc(item.color)}"></i><span class="${item.status}">${STATUS_LABELS[item.status]}</span></div><strong>${esc(item.name)}</strong><small>${leftLabel(item)}</small><div class="mini-meter"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></article>`).join('')
+  $('#overviewBudget').innerHTML = pulse.map(item => `<article class="pulse-item clickable" role="button" tabindex="0" data-pulse="${esc(item.id)}" aria-label="Open ${esc(item.name)} in Budget"><div class="pulse-top"><i class="category-bullet" style="background:${esc(item.color)}"></i><span class="${item.status}">${STATUS_LABELS[item.status]}</span></div><strong>${esc(item.name)}</strong><small>${leftLabel(item)}</small><div class="mini-meter"><span style="width:${Math.max(0, Math.min(item.ratio * 100, 100))}%;background:${statusColor(item)}"></span></div></article>`).join('')
     || '<p class="empty-note">Add a category with a monthly limit to see it here.</p>';
 
   $('#recentTransactions').innerHTML = state.transactions.slice(0, 6).map(transactionRow).join('')
@@ -341,8 +342,8 @@ const monthLabel = key => parseDay(`${key}-01`).toLocaleDateString('en-US', {mon
 
 function budgetNote(item) {
   const here = state.transactions.filter(t => t.category === item.name && t.date.startsWith(month));
-  if (here.length) return here.some(t => !t.pending && !t.hidden) ? 'Refunds offset spending' : `${here.length} pending or hidden`;
-  return state.transactions.some(t => t.category === item.name) ? 'Activity in other months' : 'No activity';
+  if (here.length) return here.some(t => !t.pending && !t.hidden) ? '' : `${here.length} pending or hidden`;
+  return state.transactions.some(t => t.category === item.name) ? '' : 'No activity';
 }
 
 function categoryPreview(item) {
@@ -350,17 +351,10 @@ function categoryPreview(item) {
   const latest = all.slice(0, 5);
   const pending = all.filter(t => t.pending).length;
   const hidden = all.filter(t => t.hidden).length;
-  const other = state.transactions.filter(t => t.category === item.name && !t.date.startsWith(month));
   const parts = [pending && `${pending} pending`, hidden && `${hidden} hidden`].filter(Boolean);
-  const counted = all.filter(t => !t.pending && !t.hidden);
-  const refundsOnly = counted.length && counted.reduce((total, t) => total + t.amount, 0) <= 0;
-  const why = refundsOnly ? '<p class="preview-note">Refunds and credits cancel out purchases here, so nothing counts as spent.</p>' : parts.length ? `<p class="preview-note">${parts.join(' and ')} ${pending + hidden === 1 ? 'isn’t' : 'aren’t'} counted toward this budget. Pending items count once they post; hidden ones count when you click the eye in Activity.</p>` : '';
+  const why = parts.length ? `<p class="preview-note">${parts.join(' and ')} ${pending + hidden === 1 ? 'isn’t' : 'aren’t'} counted toward this budget. Pending items count once they post; hidden ones count when you click the eye in Activity.</p>` : '';
   let empty = '';
-  if (!all.length) {
-    const newest = other[0];  // transactions are newest first
-    empty = `<p class="empty-note">No ${esc(item.name)} transactions in ${monthLabel(month)}.</p>${other.length
-      ? `<p class="preview-note">You have ${other.length} in other months, the latest on ${shortDate(newest.date)}. The budget only counts the month shown.</p><button class="quiet-button" type="button" data-goto-month="${newest.date.slice(0, 7)}">Show ${monthLabel(newest.date.slice(0, 7))}</button>` : ''}`;
-  }
+  if (!all.length) empty = `<p class="empty-note">No ${esc(item.name)} transactions in ${monthLabel(month)}.</p>`;
   const link = all.length ? `<button class="text-button" type="button" data-view-category="${esc(item.name)}">${all.length > latest.length ? `View all ${all.length}` : 'Open'} in Activity <span>→</span></button>` : '';
   return `<div class="category-preview"><p class="preview-title">Latest in ${esc(item.name)} · ${monthLabel(month)}</p>${why}${latest.map(transactionRow).join('')}${empty}${link}</div>`;
 }
@@ -383,7 +377,7 @@ function renderBudgets() {
     const members = items.filter(item => item.group === group);
     const spent = members.reduce((total, item) => total + item.spent, 0);
     const budget = members.reduce((total, item) => total + item.budget, 0);
-    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : budgetNote(item)}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
+    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent !== 0 ? '' : budgetNote(item)}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.max(0, Math.min(item.ratio, 1)) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.max(0, Math.min(item.ratio * 100, 100))}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
   }).join('');
   markup += uncategorizedSection(summary);
   $('#budgetGroups').innerHTML = (state.categories.length ? '' : '<p class="empty-note">No categories yet. Add one to start your plan.</p>') + markup;
@@ -634,8 +628,6 @@ $('#budgetGroups').addEventListener('click', event => {
   if (id) { openCategoryDialog(id); return; }
   const viewAll = event.target.closest('[data-view-category]');
   if (viewAll) { viewCategoryTransactions(viewAll.dataset.viewCategory, month); return; }
-  const jump = event.target.closest('[data-goto-month]');
-  if (jump) { month = jump.dataset.gotoMonth; renderAll(); return; }
   const row = event.target.closest('[data-preview]');
   if (row && !event.target.closest('button')) {
     expandedCategory = expandedCategory === row.dataset.preview ? null : row.dataset.preview;
