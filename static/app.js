@@ -340,10 +340,30 @@ function renderOverview() {
 let expandedCategory = null;
 const monthLabel = key => parseDay(`${key}-01`).toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
 
+function budgetNote(item) {
+  const here = state.transactions.filter(t => t.category === item.name && t.date.startsWith(month));
+  if (here.length) return here.some(t => !t.pending && !t.hidden) ? 'Refunds offset spending' : `${here.length} pending or hidden`;
+  return state.transactions.some(t => t.category === item.name) ? 'Activity in other months' : 'No activity';
+}
+
 function categoryPreview(item) {
   const all = state.transactions.filter(t => t.category === item.name && t.date.startsWith(month));
   const latest = all.slice(0, 5);
-  return `<div class="category-preview"><p class="preview-title">Latest in ${esc(item.name)} · ${monthLabel(month)}</p>${latest.map(transactionRow).join('') || '<p class="empty-note">No transactions in this category this month.</p>'}<button class="text-button" type="button" data-view-category="${esc(item.name)}">${all.length > latest.length ? `View all ${all.length}` : 'Open in Activity'} <span>→</span></button></div>`;
+  const pending = all.filter(t => t.pending).length;
+  const hidden = all.filter(t => t.hidden).length;
+  const other = state.transactions.filter(t => t.category === item.name && !t.date.startsWith(month));
+  const parts = [pending && `${pending} pending`, hidden && `${hidden} hidden`].filter(Boolean);
+  const counted = all.filter(t => !t.pending && !t.hidden);
+  const refundsOnly = counted.length && counted.reduce((total, t) => total + t.amount, 0) <= 0;
+  const why = refundsOnly ? '<p class="preview-note">Refunds and credits cancel out purchases here, so nothing counts as spent.</p>' : parts.length ? `<p class="preview-note">${parts.join(' and ')} ${pending + hidden === 1 ? 'isn’t' : 'aren’t'} counted toward this budget. Pending items count once they post; hidden ones count when you click the eye in Activity.</p>` : '';
+  let empty = '';
+  if (!all.length) {
+    const newest = other[0];  // transactions are newest first
+    empty = `<p class="empty-note">No ${esc(item.name)} transactions in ${monthLabel(month)}.</p>${other.length
+      ? `<p class="preview-note">You have ${other.length} in other months, the latest on ${shortDate(newest.date)}. The budget only counts the month shown.</p><button class="quiet-button" type="button" data-goto-month="${newest.date.slice(0, 7)}">Show ${monthLabel(newest.date.slice(0, 7))}</button>` : ''}`;
+  }
+  const link = all.length ? `<button class="text-button" type="button" data-view-category="${esc(item.name)}">${all.length > latest.length ? `View all ${all.length}` : 'Open'} in Activity <span>→</span></button>` : '';
+  return `<div class="category-preview"><p class="preview-title">Latest in ${esc(item.name)} · ${monthLabel(month)}</p>${why}${latest.map(transactionRow).join('')}${empty}${link}</div>`;
 }
 
 function uncategorizedSection(summary) {
@@ -364,7 +384,7 @@ function renderBudgets() {
     const members = items.filter(item => item.group === group);
     const spent = members.reduce((total, item) => total + item.spent, 0);
     const budget = members.reduce((total, item) => total + item.budget, 0);
-    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : 'No activity'}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
+    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : budgetNote(item)}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
   }).join('');
   markup += uncategorizedSection(summary);
   $('#budgetGroups').innerHTML = (state.categories.length ? '' : '<p class="empty-note">No categories yet. Add one to start your plan.</p>') + markup;
@@ -387,9 +407,14 @@ function renderTransactions() {
   const chosen = filter.value;
   filter.innerHTML = '<option value="all">All categories</option>' + names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
   filter.value = names.includes(chosen) ? chosen : 'all';
+  const monthFilter = $('#monthFilter');
+  const chosenMonth = monthFilter.value || 'all';
+  const months = [...new Set(state.transactions.map(t => t.date.slice(0, 7)))].sort().reverse();
+  monthFilter.innerHTML = '<option value="all">All months</option>' + months.map(key => `<option value="${key}">${monthLabel(key)}</option>`).join('');
+  monthFilter.value = months.includes(chosenMonth) ? chosenMonth : 'all';
   const query = $('#transactionSearch').value.trim().toLowerCase();
   const stateFilter = $('#stateFilter').value;
-  const matches = state.transactions.filter(t =>
+  const matches = state.transactions.filter(t => (monthFilter.value === 'all' || t.date.startsWith(monthFilter.value)) &&
     (!query || t.merchant.toLowerCase().includes(query) || t.category.toLowerCase().includes(query) || t.account.toLowerCase().includes(query) || (t.notes || '').toLowerCase().includes(query))
     && (filter.value === 'all' || t.category === filter.value)
     && (stateFilter === 'all' || (stateFilter === 'pending') === t.pending));
@@ -613,7 +638,9 @@ $('#budgetGroups').addEventListener('click', event => {
   const id = event.target.dataset.edit;
   if (id) { openCategoryDialog(id); return; }
   const viewAll = event.target.closest('[data-view-category]');
-  if (viewAll) { viewCategoryTransactions(viewAll.dataset.viewCategory); return; }
+  if (viewAll) { viewCategoryTransactions(viewAll.dataset.viewCategory, month); return; }
+  const jump = event.target.closest('[data-goto-month]');
+  if (jump) { month = jump.dataset.gotoMonth; renderAll(); return; }
   const row = event.target.closest('[data-preview]');
   if (row && !event.target.closest('button')) {
     expandedCategory = expandedCategory === row.dataset.preview ? null : row.dataset.preview;
@@ -621,9 +648,10 @@ $('#budgetGroups').addEventListener('click', event => {
     document.querySelector(`[data-preview="${CSS.escape(row.dataset.preview)}"]`)?.focus({preventScroll: true});
   }
 });
-function viewCategoryTransactions(name) {
+function viewCategoryTransactions(name, monthKeyToShow = 'all') {
   $('#transactionSearch').value = '';
   $('#stateFilter').value = 'all';
+  $('#monthFilter').value = monthKeyToShow;
   $('#categoryFilter').value = name;
   renderTransactions();
   go('transactions');
@@ -691,6 +719,7 @@ $('#deleteCategory').addEventListener('click', async () => {
 ['input', 'change'].forEach(type => $('#transactionSearch').addEventListener(type, renderTransactions));
 $('#categoryFilter').addEventListener('change', renderTransactions);
 $('#stateFilter').addEventListener('change', renderTransactions);
+$('#monthFilter').addEventListener('change', renderTransactions);
 
 $('#transactionTable').addEventListener('change', async event => {
   const id = event.target.dataset.transaction;

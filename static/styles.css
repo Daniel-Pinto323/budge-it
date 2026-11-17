@@ -48,3 +48,4 @@ td.amount{min-width:112px}
 
 #uncategorizedSection{scroll-margin-top:16px}#uncategorizedSection .empty-note{margin:8px 0}
 @keyframes flash{0%{box-shadow:0 0 0 3px #d9a13b99}100%{box-shadow:0 0 0 3px #d9a13b00}}.budget-group.flash{animation:flash 1.6s ease-out}
+.preview-note{font-size:11px;color:var(--muted);line-height:1.5;margin:4px 0 8px;max-width:520px}.category-preview .quiet-button{margin:2px 0 6px}

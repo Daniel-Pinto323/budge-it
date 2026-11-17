@@ -79,6 +79,11 @@ an `https://` `PUBLIC_URL`.
   (click one to categorize it) and a link to review them all in Activity. When there are
   none it says so. Overview's "uncategorized transactions" attention item jumps straight
   there and briefly highlights the section.
+- **Why a category shows "No activity".** The Budget page counts one month, and only posted,
+  non-hidden transactions. Expanding a category now says why something isn't counted: it is
+  in another month (with a button to jump there), pending, hidden, or cancelled out by
+  refunds. Activity has a month filter, and the "View all in Activity" links open it already
+  set to the month you were looking at, so the two pages agree.
 - **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens
   that category on the Budget page. Clicking any budget row there expands the latest
   five transactions in that category for the month shown, with a link to see them all
