@@ -372,6 +372,10 @@ function renderTransactions() {
     : `${matches.length} transaction${matches.length === 1 ? '' : 's'}`;
 }
 
+function manualNote(account) {
+  return `<div class="account-extra"><span>Entered by hand · updated ${ago(account.balance_at)}</span><button class="quiet-button" type="button" data-edit-manual="${esc(account.id)}">Edit</button><button class="delete-category" type="button" data-delete-manual="${esc(account.id)}">Delete</button></div>`;
+}
+
 function ledgerNote(account) {
   const basis = account.anchor_date
     ? `Balance is ${precise(Math.abs(account.anchor_cents))}${account.anchor_cents < 0 ? ' owed' : ''} on ${shortDate(account.anchor_date)}, plus transactions since.`
@@ -396,7 +400,7 @@ function renderAccounts() {
     const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : manual ? ['', 'Manual'] : (STATUS[connection.status] || STATUS.error);
     const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
     const id = esc(connection.id);
-    const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : ''}`).join('')
+    const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : manual ? manualNote(account) : ''}`).join('')
       || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
     const actions = demo || manual ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
     return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
@@ -862,7 +866,7 @@ $('#addManualAccount').addEventListener('click', () => {
   $('#manualAccountTitle').textContent = 'Add an account';
   $('#manualAccountDialog').showModal();
 });
-$('#manualAccountsList').addEventListener('click', event => {
+function manualAccountAction(event) {
   const editId = event.target.dataset.editManual;
   const deleteId = event.target.dataset.deleteManual;
   const account = state.accounts.find(item => item.id === (editId || deleteId));
@@ -879,7 +883,10 @@ $('#manualAccountsList').addEventListener('click', event => {
   } else if (window.confirm(`Delete ${account.name} and its history?`)) {
     act(() => api('DELETE', `/api/manual-accounts/${deleteId}`), `${account.name} deleted`);
   }
-});
+}
+$('#manualAccountsList').addEventListener('click', manualAccountAction);
+$('#addManualFromAccounts').addEventListener('click', () => $('#addManualAccount').click());
+$('#accountsList').addEventListener('click', manualAccountAction);
 $('#manualAccountForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
