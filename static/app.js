@@ -373,7 +373,7 @@ function renderTransactions() {
 }
 
 const KIND_LABELS = {credit: 'Credit card', depository: 'Bank account', investment: 'Investment', loan: 'Loan', other: 'Other'};
-const KIND_SECTIONS = [['credit', 'Credit cards'], ['depository', 'Bank accounts'], ['investment', 'Investments'], ['other', 'Loans & other']];
+const KIND_SECTIONS = [['credit', 'Credit cards'], ['depository', 'Bank accounts'], ['investment', 'Investments'], ['other', 'Investments & other']];
 const kindSection = kind => ({credit: 'credit', depository: 'depository', investment: 'investment'})[kind] || 'other';
 const typeSelect = account => `<label class="account-type">Type <select data-account-kind="${esc(account.id)}">${Object.entries(KIND_LABELS).map(([value, label]) => `<option value="${value}"${value === account.kind ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`;
 
