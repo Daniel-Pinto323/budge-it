@@ -254,7 +254,7 @@ function renderChrome() {
 }
 
 function transactionRow(t) {
-  return `<div class="transaction-row clickable" role="button" tabindex="0" data-open-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">${iconMarkup(t.merchant)}<div><div class="transaction-name">${esc(t.merchant)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}${t.hidden ? '<span class="hidden-badge">HIDDEN</span>' : ''}</div><div class="transaction-meta">${esc(t.category)} · ${shortDate(t.date)}${t.notes ? ` · <span class="note-snippet">${esc(t.notes)}</span>` : ''}</div></div><div class="transaction-amount">${signedAmount(t.amount)}<small>${esc(t.account.split(' ••')[0])}</small></div></div>`;
+  return `<div class="transaction-row clickable" role="button" tabindex="0" data-open-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">${iconMarkup(t.merchant)}<div><div class="transaction-name">${esc(t.merchant)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</div><div class="transaction-meta">${esc(t.category)} · ${shortDate(t.date)}${t.notes ? ` · <span class="note-snippet">${esc(t.notes)}</span>` : ''}</div></div><div class="transaction-amount">${signedAmount(t.amount)}<small>${esc(t.account.split(' ••')[0])}</small></div><button class="eye-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide-row="${esc(t.id)}" aria-pressed="${t.hidden}" title="${t.hidden ? 'Hidden from your budget. Click to include.' : 'Counts toward your budget. Click to hide.'}" aria-label="${t.hidden ? 'Hidden from budget; include' : 'Included in budget; hide'} ${esc(t.merchant)}">${t.hidden ? EYE_OFF : EYE}</button></div>`;
 }
 
 function chartPoints(history, width, height, pad) {
@@ -285,14 +285,17 @@ function renderCharts() {
   $('#largeChart').innerHTML = `<svg viewBox="0 0 600 150" preserveAspectRatio="none" role="img" aria-label="Net worth from ${first} to ${last}">${grid}<path class="net-line" d="${pathFrom(chartPoints(history, 600, 150, 14))}"/></svg><div class="chart-labels"><span>${first}</span><span>${history.length > 2 ? middle : ''}</span><span>${last}</span></div>`;
 }
 
-function worthTrend() {
+let showNetWorth = false;   // hidden each time the app loads
+const MASK = '*****';
+
+function worthTrend(masked = false) {
   const history = state.net_worth_history;
   if (history.length < 2) return '<small>Tracking starts with your first sync</small>';
   const latest = history[history.length - 1];
   const cutoff = new Date(parseDay(latest.day).getTime() - 30 * 86400000);
   const baseline = [...history].reverse().find(point => parseDay(point.day) <= cutoff) || history[0];
   const change = latest.total - baseline.total;
-  return `<span class="${change >= 0 ? 'good' : ''}">${change >= 0 ? PLUS : MINUS}${money(Math.abs(change))}</span><small>since ${shortDate(baseline.day)}</small>`;
+  return `<span class="${change >= 0 ? 'good' : ''}">${masked ? MASK : `${change >= 0 ? PLUS : MINUS}${money(Math.abs(change))}`}</span><small>since ${shortDate(baseline.day)}</small>`;
 }
 
 function attentionItems(summary, items) {
@@ -332,8 +335,14 @@ function renderOverview() {
   $('#attentionList').innerHTML = attention.map(([tone, icon, title, text, view, anchor]) => `<div class="attention-item"><div class="attention-icon ${tone}">${icon}</div><div><strong>${esc(title)}</strong><p>${esc(text)}</p></div><button type="button" data-go="${view}"${anchor ? ` data-scroll="${anchor}"` : ''} aria-label="Open ${view}">→</button></div>`).join('')
     || '<p class="empty-note">Nothing needs your attention.</p>';
 
-  $('#netWorthHero').textContent = money(netWorth().total);
-  $('#netWorthTrend').innerHTML = worthTrend();
+  $('#netWorthHero').textContent = showNetWorth ? money(netWorth().total) : MASK;
+  $('#netWorthTrend').innerHTML = worthTrend(!showNetWorth);
+  const toggle = $('#netWorthEye');
+  toggle.innerHTML = showNetWorth ? EYE : EYE_OFF;
+  toggle.classList.toggle('is-hidden', !showNetWorth);
+  toggle.setAttribute('aria-pressed', String(showNetWorth));
+  toggle.setAttribute('aria-label', showNetWorth ? 'Hide net worth' : 'Show net worth');
+  toggle.title = showNetWorth ? 'Click to hide net worth' : 'Click to show net worth';
   renderCharts();
 }
 
@@ -581,6 +590,14 @@ document.addEventListener('keydown', event => {
 document.addEventListener('click', event => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
+  const hideRow = target.closest('[data-hide-row]');
+  if (hideRow) {
+    const transaction = state.transactions.find(item => item.id === hideRow.dataset.hideRow);
+    if (!transaction) return;
+    const hidden = !transaction.hidden;
+    act(() => api('PATCH', `/api/transactions/${transaction.id}`, {hidden}), `${transaction.merchant} is ${hidden ? 'hidden from' : 'included in'} your budget`);
+    return;
+  }
   const opener = target.closest('[data-open-transaction]');
   if (opener) { openTransactionEditor(opener.dataset.openTransaction); return; }
   const pulse = target.closest('[data-pulse]');
@@ -741,6 +758,7 @@ function openTransactionEditor(id) {
   $('#editTransactionDialog').showModal();
 }
 
+$('#netWorthEye').addEventListener('click', () => { showNetWorth = !showNetWorth; renderOverview(); });
 $('#transactionTable').addEventListener('click', event => {
   const hideId = event.target.closest('[data-hide]')?.dataset.hide;
   const deleteId = event.target.dataset.deleteTransaction;
