@@ -42,12 +42,6 @@ class Config:
     plaid_env: str
     plaid_base_url: str
     plaid_redirect_uri: str
-    mx_client_id: str
-    mx_api_key: str
-    mx_base_url: str
-    mx_api_version: str
-    mx_webhook_username: str
-    mx_webhook_password: str
 
     @property
     def secure(self) -> bool:
@@ -61,10 +55,6 @@ class Config:
     @property
     def plaid_configured(self) -> bool:
         return bool(self.plaid_client_id and self.plaid_secret)
-
-    @property
-    def mx_configured(self) -> bool:
-        return bool(self.mx_client_id and self.mx_api_key)
 
     @property
     def db_path(self) -> Path:
@@ -92,10 +82,4 @@ def load_config() -> Config:
         plaid_env=plaid_env,
         plaid_base_url=_env("PLAID_BASE_URL", f"https://{plaid_env}.plaid.com").rstrip("/"),
         plaid_redirect_uri=_env("PLAID_REDIRECT_URI"),
-        mx_client_id=_env("MX_CLIENT_ID") or _env("MX_USERNAME"),
-        mx_api_key=_env("MX_API_KEY") or _env("MX_PASSWORD"),
-        mx_base_url=_env("MX_BASE_URL", "https://int-api.mx.com").rstrip("/"),
-        mx_api_version=_env("MX_API_VERSION", "v20260929"),
-        mx_webhook_username=_env("MX_WEBHOOK_USERNAME"),
-        mx_webhook_password=_env("MX_WEBHOOK_PASSWORD"),
     )

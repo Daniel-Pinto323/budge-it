@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE users (
@@ -23,7 +23,6 @@ CREATE TABLE users (
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    mx_user_guid TEXT,
     created_at TEXT NOT NULL
 );
 CREATE TABLE sessions (
@@ -36,8 +35,8 @@ CREATE TABLE sessions (
 CREATE TABLE connections (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,              -- plaid | mx | demo
-    provider_item_id TEXT NOT NULL,      -- Plaid item_id / MX member guid
+    provider TEXT NOT NULL,              -- plaid | csv | manual | demo
+    provider_item_id TEXT NOT NULL,      -- Plaid item_id (or a synthetic id for csv / manual / demo)
     institution TEXT NOT NULL,
     institution_id TEXT,
     secret_enc TEXT,                     -- encrypted Plaid access token
@@ -154,16 +153,9 @@ def init(path: Path) -> None:
     if version == 0:
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif version in (1, 2, 3, 4, 5):
-        if version == 1:
-            _migrate_1_to_2(conn)
-        if version <= 2:
-            _migrate_2_to_3(conn)
-        if version <= 3:
-            _migrate_3_to_4(conn)
-        if version <= 4:
-            _migrate_4_to_5(conn)
-        _migrate_5_to_6(conn)
+    elif version < SCHEMA_VERSION:
+        for step in range(version, SCHEMA_VERSION):
+            _MIGRATIONS[step](conn)  # each step records its own user_version
     elif version != SCHEMA_VERSION:
         raise SystemExit(f"Database schema version {version} is not supported by this build.")
     path.chmod(0o600)
@@ -265,6 +257,23 @@ def _migrate_5_to_6(conn: sqlite3.Connection) -> None:
         conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
+
+
+def _migrate_6_to_7(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # The experimental MX integration was removed: drop its per-user id and any connections it created
+        # (the app only ever ran it against a test server).
+        conn.execute("DELETE FROM connections WHERE provider = 'mx'")
+        conn.execute("ALTER TABLE users DROP COLUMN mx_user_guid")
+        conn.execute("PRAGMA user_version = 7")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4, 4: _migrate_4_to_5, 5: _migrate_5_to_6, 6: _migrate_6_to_7}
 
 
 def connect() -> sqlite3.Connection:

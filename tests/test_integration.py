@@ -1,4 +1,4 @@
-"""End-to-end tests: the real server over HTTP, with Plaid and MX replaced by a local mock.
+"""End-to-end tests: the real server over HTTP, with Plaid replaced by a local mock.
 
 Run with:  python3 -m unittest discover -s tests -v
 """
@@ -50,8 +50,6 @@ class Mock:
     """Scripted provider responses plus a log of what the app asked for."""
     plaid_stage = 1
     removed_items: list[str] = []
-    mx_deleted: list[str] = []
-    mx_headers: dict[str, str] = {}
     mutation_errors = 0
 
     @classmethod
@@ -105,46 +103,6 @@ class Mock:
                                  "created_at": 1, "expired_at": None}}
         return 404, {"error_message": "unknown path " + path}
 
-    @classmethod
-    def mx(cls, method: str, path: str, query: str, body: dict) -> tuple[int, dict]:
-        one_page = {"current_page": 1, "per_page": 100, "total_entries": 1, "total_pages": 1}
-        if method == "POST" and path == "/users":
-            return 200, {"user": {"guid": "USR-1", "id": body["user"]["id"]}}
-        if method == "POST" and path == "/users/USR-1/widget_urls":
-            cls.last_widget_request = body
-            return 200, {"widget_url": {"type": "connect_widget", "url": "https://int-widgets.moneydesktop.com/md/connect/abc", "user_id": "x"}}
-        if method == "GET" and path == "/users/USR-1/members":
-            return 200, {"members": [{"guid": "MBR-1", "name": "MX Bank", "institution_code": "mxbank"}], "pagination": one_page}
-        if path == "/users/USR-1/members/MBR-1/status":
-            return 200, {"member_status": {"status": "CONNECTED"}}
-        if method == "POST" and path == "/users/USR-1/members/MBR-1/transactions":
-            return 202, {"member_status": {"status": "CONNECTED"}}
-        if method == "GET" and path == "/users/USR-1/members/MBR-1/accounts":
-            return 200, {"accounts": [
-                {"guid": "ACT-1", "name": "MX Savings", "type": "SAVINGS", "account_number_display": "****7788",
-                 "current_balance": 2000.5, "balances": {"balance": 2000.5, "available_balance": 1990}},
-                {"guid": "ACT-2", "name": "MX Visa", "type": "CREDIT_CARD", "account_number_display": "1234", "current_balance": 150},
-            ], "pagination": one_page}
-        if method == "GET" and path == "/users/USR-1/accounts/ACT-1/transactions":
-            assert "from_date=" in query and "to_date=" in query
-            return 200, {"transactions": [
-                {"guid": "TRN-1", "amount": 1500, "type": "CREDIT", "status": "POSTED", "date": "2026-11-03",
-                 "description": "Paycheck", "category": {"name": "Paycheck", "top_level_category": "Income"}},
-            ], "pagination": one_page}
-        if method == "GET" and path == "/users/USR-1/accounts/ACT-2/transactions":
-            return 200, {"transactions": [
-                {"guid": "TRN-2", "amount": 42.42, "type": "DEBIT", "status": "PENDING", "date": "2026-11-08",
-                 "description": "GAS STATION 123", "merchant": {"name": "Gas Station"},
-                 "category": {"name": "Gas", "top_level_category": "Auto & Transport"}},
-                # legacy field layout must parse too
-                {"guid": "TRN-3", "amount": 9.99, "type": "DEBIT", "status": "POSTED", "date": "2026-11-07",
-                 "description": "=HYPERLINK(evil)", "category": "Groceries", "top_level_category": "Food & Dining"},
-            ], "pagination": one_page}
-        if method == "DELETE" and path == "/users/USR-1/members/MBR-1":
-            cls.mx_deleted.append("MBR-1")
-            return 204, {}
-        return 404, {"error": {"message": "unknown path " + path}}
-
 
 class MockHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -154,11 +112,7 @@ class MockHandler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path)
         size = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(size)) if size else {}
-        if parts.path.startswith("/plaid"):
-            status, payload = Mock.plaid(parts.path[len("/plaid"):], body)
-        else:
-            Mock.mx_headers = dict(self.headers)
-            status, payload = Mock.mx(self.command, parts.path[len("/mx"):], parts.query, body)
+        status, payload = Mock.plaid(parts.path[len("/plaid"):], body) if parts.path.startswith("/plaid") else (404, {})
         raw = json.dumps(payload).encode() if status != 204 else b""
         self.send_response(status)
         self.send_header("Content-Length", str(len(raw)))
@@ -237,8 +191,6 @@ class IntegrationTest(unittest.TestCase):
             "HOST": "127.0.0.1", "PORT": "0", "PUBLIC_URL": "http://localhost:1", "DATA_DIR": cls.tmp.name,
             "BUDGEIT_ENCRYPTION_KEY": Fernet.generate_key().decode(),
             "PLAID_CLIENT_ID": "client", "PLAID_SECRET": "secret", "PLAID_ENV": "sandbox", "PLAID_BASE_URL": mock_url + "/plaid",
-            "MX_CLIENT_ID": "mxid", "MX_API_KEY": "mxkey", "MX_BASE_URL": mock_url + "/mx",
-            "MX_WEBHOOK_USERNAME": "hook", "MX_WEBHOOK_PASSWORD": "hook-secret",
         })
         cls.config = load_config()
         security.init_encryption(cls.config.encryption_key)
@@ -360,42 +312,9 @@ class IntegrationTest(unittest.TestCase):
 
     def test_13_unsigned_webhook_is_rejected(self):
         self.assertEqual(Client(self.base).request("POST", "/api/webhooks/plaid", {"item_id": "item-1"})[0], 401)
-        self.assertEqual(Client(self.base).request("POST", "/api/webhooks/mx", {"member_guid": "MBR-1"})[0], 401)
 
     def test_14_rules_apply_to_future_imports_only(self):
         self.assertEqual(self.client.request("POST", "/api/rules", {"merchant": "Gas Station", "category": "Travel"})[0], 200)
-
-    def test_20_mx_widget_discover_and_import(self):
-        status, payload, _ = self.client.request("POST", "/api/mx/widget-url", {})
-        self.assertEqual(status, 200, payload)
-        self.assertTrue(payload["widget"]["url"].startswith("https://int-widgets.moneydesktop.com/"))
-        self.assertEqual(Mock.last_widget_request["widget_url"]["data_request"], {"products": ["transactions"]})
-        self.assertEqual(Mock.mx_headers.get("Accept-Version"), "v20260929")
-        self.assertEqual(Mock.mx_headers.get("Authorization"), "Basic " + base64.b64encode(b"mxid:mxkey").decode())
-        status, payload, _ = self.client.request("POST", "/api/mx/discover", {})
-        self.assertEqual((status, payload.get("members")), (200, 1), payload)
-        state = payload["state"]
-        mx = [c for c in state["connections"] if c["provider"] == "mx"]
-        self.assertEqual([(c["institution"], c["status"]) for c in mx], [("MX Bank", "healthy")])
-        accounts = {a["name"]: a for a in state["accounts"]}
-        self.assertEqual((accounts["MX Savings"]["balance_cents"], accounts["MX Savings"]["mask"]), (200050, "7788"))
-        self.assertEqual((accounts["MX Visa"]["balance_cents"], accounts["MX Visa"]["kind"]), (-15000, "credit"))
-        txns = {t["merchant"]: t for t in state["transactions"] if t["provider"] == "mx"}
-        self.assertEqual((txns["Paycheck"]["amount"], txns["Paycheck"]["category"]), (-150000, "Income"))
-        self.assertEqual((txns["Gas Station"]["amount"], txns["Gas Station"]["pending"], txns["Gas Station"]["category"]),
-                         (4242, True, "Travel"))  # rule from test_14 beats the provider hint
-        self.assertEqual(txns["=HYPERLINK(evil)"]["category"], "Groceries")
-        # Discovering again must not duplicate connections, accounts, or transactions.
-        again = self.client.request("POST", "/api/mx/discover", {})[1]["state"]
-        self.assertEqual(len(again["transactions"]), len(state["transactions"]))
-        self.assertEqual(len(again["accounts"]), len(state["accounts"]))
-
-    def test_21_mx_webhook_with_basic_auth(self):
-        auth = "Basic " + base64.b64encode(b"hook:hook-secret").decode()
-        event = {"type": "CONNECTION_STATUS", "action": "CHANGED", "connection_status": "DENIED", "member_guid": "MBR-1", "user_guid": "USR-1"}
-        self.assertEqual(Client(self.base).request("POST", "/api/webhooks/mx", event, headers={"Authorization": auth})[0], 200)
-        mx = next(c for c in self.state()["connections"] if c["provider"] == "mx")
-        self.assertEqual(mx["status"], "needs_reauth")
 
     def test_30_budget_data_and_export(self):
         self.assertEqual(self.client.request("POST", "/api/categories", {"name": "Pets", "group": "Everyday", "budget": 5000})[0], 200)
@@ -409,10 +328,13 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual((vet["category"], vet["manual"], vet["amount"]), ("Pet care", True, 4500))
         self.assertEqual(self.client.request("DELETE", f"/api/categories/{pets['id']}", {})[0], 200)
         self.assertEqual(next(t for t in self.state()["transactions"] if t["merchant"] == "Vet")["category"], "Uncategorized")
+        evil = self.client.request("POST", "/api/transactions", {"merchant": "=HYPERLINK(evil)", "date": "2026-11-09", "amount": 100,
+                                                                  "kind": "expense", "category": "Uncategorized"})[1]["state"]
         status, body, headers = self.client.request("GET", "/api/export.csv")
         self.assertEqual(status, 200)
         self.assertIn("attachment", headers["Content-Disposition"])
-        self.assertIn("'=HYPERLINK(evil)", body.decode("utf-8-sig"))
+        self.assertIn("'=HYPERLINK(evil)", body.decode("utf-8-sig"))  # spreadsheet formulas are neutralised on export
+        self.client.request("DELETE", f"/api/transactions/{next(t for t in evil['transactions'] if t['merchant'] == '=HYPERLINK(evil)')['id']}", {})
 
     def test_35_csv_import_is_idempotent_and_signed_correctly(self):
         body = {"csv": CHASE_CSV, "account": "Chase 0986", "mask": "0986"}
@@ -569,6 +491,17 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(account(state, "Roth IRA")["kind"], "investment")  # editing the amount keeps the type
         self.client.request("DELETE", f"/api/manual-accounts/{roth['id']}", {})
 
+    def test_39_exact_merchant_rules_beat_keywords(self):
+        csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
+                    "11/04/2026,11/05/2026,Shell Oil 5521,Travel,Sale,-30.00,\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": csv_text, "account": "Rules Card", "mask": "9999"})[1]["state"]
+        self.assertEqual(next(t for t in state["transactions"] if t["merchant"] == "Shell Oil 5521")["category"], "Transportation")
+        self.client.request("POST", "/api/rules", {"merchant": "Shell Oil 5521", "category": "Fun money"})
+        csv_text += "11/06/2026,11/07/2026,Shell Oil 5521,Travel,Sale,-8.00,\n"
+        state = self.client.request("POST", "/api/import/csv", {"csv": csv_text, "account": "Rules Card"})[1]["state"]
+        rows = [t for t in state["transactions"] if t["merchant"] == "Shell Oil 5521"]
+        self.assertEqual([t["category"] for t in rows], ["Fun money", "Fun money"])  # re-importing applies the rule to earlier guesses too
+
     def test_39_transfers_start_hidden_but_still_move_balances(self):
         csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
                     "11/03/2026,11/03/2026,AUTOMATIC PAYMENT - THANK YOU,,Payment,40.00,\n"
@@ -655,9 +588,11 @@ class IntegrationTest(unittest.TestCase):
 
     def test_41_delete_all_data_requires_password(self):
         self.assertEqual(self.client.request("POST", "/api/data/delete", {"password": "wrong"})[0], 403)
+        self.assertEqual(self.client.request("POST", "/api/plaid/exchange", {"public_token": "public-again"})[0], 200)
+        revoked = len(Mock.removed_items)
         status, payload, _ = self.client.request("POST", "/api/data/delete", {"password": PASSWORD})
         self.assertEqual(status, 200, payload)
-        self.assertEqual(Mock.mx_deleted, ["MBR-1"])
+        self.assertEqual(len(Mock.removed_items), revoked + 1)  # the provider was told to revoke access
         state = payload["state"]
         self.assertEqual((state["transactions"], state["accounts"], state["connections"], state["rules"]), ([], [], [], []))
         self.assertEqual(len(state["categories"]), len(store.DEFAULT_CATEGORIES))

@@ -10,7 +10,7 @@ read-only token, encrypted at rest.
 - `budgeit/` — server: config, SQLite storage, auth, sync, provider adapters, HTTP API
 - `static/` — the browser app (plain HTML/CSS/JS, no build step)
 - `deploy/` — systemd unit, Caddy config, and the auto-update script and timer for self-hosting
-- `tests/` — integration tests against fake Plaid and MX servers
+- `tests/` — integration tests against a fake Plaid server
 
 ## Run it locally
 
@@ -41,11 +41,9 @@ registration that banks such as Chase and Capital One require, then set
 phone, also set `PLAID_REDIRECT_URI` to your public URL plus `/` and add the same
 value under Allowed redirect URIs in the Plaid Dashboard.
 
-**Other providers.** Plaid is the only supported provider. The code includes an
-experimental MX adapter (`MX_CLIENT_ID`, `MX_API_KEY` in `.env`), but it has only
-been run against a fake server, MX production access requires an agreement with
-MX, and it is out of scope for this project. Treat it as a possible future
-backup, not a working feature.
+**Until Plaid is live.** Plaid is the only live provider, and production access is
+still pending. In the meantime the app runs on manual data: import CSV statements
+(Accounts → ↑ Import CSV) and add manual accounts (Net worth). Both are described below.
 
 **Freshness.** Data arrives when the provider has it, not in real time. The server
 re-syncs every `SYNC_INTERVAL_MINUTES` (default 6 hours), on demand from the
@@ -69,10 +67,10 @@ an `https://` `PUBLIC_URL`.
   worth stays correct (money moving between your own accounts nets to zero). Choosing
   Transfer for a transaction hides it; choosing another category shows it again; the eye
   always has the final say.
-- **Sync status** (bottom of the sidebar) reports the last successful Plaid/MX sync. With only
+- **Sync status** (bottom of the sidebar) reports the last successful Plaid sync. With only
   CSV imports and manual accounts it says "No linked accounts · CSV & manual data only"
   instead of implying anything synced.
-- **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid or MX;
+- **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid;
   CSV imports, manual accounts and sample data have nothing to sync.
 - **Uncategorized on the Budget page.** The bottom of the Budget page always shows an
   **Uncategorized** section with the latest five uncategorized transactions for the month
@@ -103,7 +101,7 @@ an `https://` `PUBLIC_URL`.
 accounts**, **Investments** and **Loans & other**, each with its own total. When you
 import a CSV the type is assumed from the file's columns and shown in the dialog
 ("Detected: …") so you can change it before importing; afterwards every account has a
-**Type** dropdown (CSV, manual, and Plaid/MX accounts alike, so a provider's
+**Type** dropdown (CSV, manual, and Plaid accounts alike, so a provider's
 guess can be corrected and the sync will not undo it). The type decides which section the account appears in.
 
 | File | Columns that identify it | Assumed type |
@@ -137,7 +135,7 @@ any other account:
   filed under Transfer so they do not count as spending. The app does not look at
   withdrawals in your bank account to work out card payments, so you only need to
   import each card's own file.
-- Only **CSV-imported** accounts work this way. Plaid and MX accounts keep the
+- Only **CSV-imported** accounts work this way. Plaid accounts keep the
   balances their provider reports.
 - Manual transactions are not tied to an account yet, so they do not move any
   balance.

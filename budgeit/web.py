@@ -7,7 +7,6 @@ the signed webhooks requires a session cookie plus a CSRF header.
 
 from __future__ import annotations
 
-import base64
 import hmac
 import json
 import logging
@@ -37,7 +36,7 @@ CSP = "; ".join([
     "font-src https://fonts.gstatic.com",
     "img-src 'self' data: https:",
     "connect-src 'self' https://*.plaid.com",
-    "frame-src https://cdn.plaid.com https://*.moneydesktop.com https://*.mx.com",
+    "frame-src https://cdn.plaid.com",
     "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'",
 ])
 ID = r"([A-Za-z0-9-]{1,64})"
@@ -98,7 +97,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
-        # MX widget events are only delivered when the embedding origin is sent as referrer.
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
         if self.app.config.secure:
@@ -201,9 +199,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             app.sync.handle_plaid_webhook(self.read_body(512_000), self.headers.get("Plaid-Verification", ""))
             self.send_json({"ok": True})
             return
-        if method == "POST" and path == "/api/webhooks/mx":
-            self.mx_webhook()
-            return
         if method != "GET" and not self.same_origin():
             raise AppError("Cross-origin request refused.", 403)
         if method == "POST" and path == "/api/login":
@@ -264,9 +259,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             ("DELETE", f"/api/rules/{ID}", lambda u, d, i: store.delete_rule(u, i)),
             ("POST", "/api/plaid/link-token", lambda u, d: {"link": sync.plaid_link_token(u, d.get("connection_id"))}),
             ("POST", "/api/plaid/exchange", self.plaid_exchange),
-            ("POST", "/api/mx/widget-url", lambda u, d: {"widget": sync.mx_widget_url(u, d.get("connection_id"))}),
-            ("POST", "/api/mx/discover", lambda u, d: {"members": self.limited_sync(u, lambda: sync.mx_discover(u))}),
-            ("POST", "/api/sync", lambda u, d: self.limited_sync(u, lambda: sync.sync_user(u, refresh=True))),
+            ("POST", "/api/sync", lambda u, d: self.limited_sync(u, lambda: sync.sync_user(u))),
             ("POST", f"/api/connections/{ID}/sync", self.sync_one),
             ("DELETE", f"/api/connections/{ID}", lambda u, d, i: sync.disconnect(u, i)),
             ("POST", "/api/import/csv", lambda u, d: {"import": csv_import.import_csv(u, d)}),
@@ -285,8 +278,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             "authenticated": True,
             "user": {"name": user["name"], "email": user["email"]},
             "csrf": user["csrf"],
-            "providers": {"plaid": config.plaid_configured, "mx": config.mx_configured, "plaid_env": config.plaid_env,
-                          "mx_env": "production" if config.mx_base_url == "https://api.mx.com" else "integration"},
+            "providers": {"plaid": config.plaid_configured, "plaid_env": config.plaid_env},
         }
 
     def send_state(self, user_id: int, extra: dict[str, Any] | None = None) -> None:
@@ -320,7 +312,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def sync_one(self, user_id: int, data: dict[str, Any], connection_id: str) -> None:
         connection = SyncService._connection(user_id, connection_id)
-        self.limited_sync(user_id, lambda: self.app.sync.sync_connection(connection["id"], refresh=True))
+        self.limited_sync(user_id, lambda: self.app.sync.sync_connection(connection["id"]))
 
     def plaid_exchange(self, user_id: int, data: dict[str, Any]) -> None:
         public_token = data.get("public_token")
@@ -334,20 +326,3 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise AppError("Password is incorrect.", 403)
         self.app.sync.disconnect_all(user_id)
         store.wipe_user_data(user_id)
-
-    def mx_webhook(self) -> None:
-        config = self.app.config
-        if not (config.mx_webhook_username and config.mx_webhook_password):
-            raise AppError("Not found.", 404)
-        expected = base64.b64encode(f"{config.mx_webhook_username}:{config.mx_webhook_password}".encode()).decode()
-        supplied = self.headers.get("Authorization", "")
-        if not hmac.compare_digest(supplied.encode(), f"Basic {expected}".encode()):
-            raise AppError("Unauthorized.", 401)
-        body = self.read_body(512_000)
-        try:
-            event = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise AppError("Invalid webhook body.") from error
-        if isinstance(event, dict):
-            self.app.sync.handle_mx_webhook(event)
-        self.send_json({"ok": True})

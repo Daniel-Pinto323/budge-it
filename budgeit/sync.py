@@ -1,4 +1,4 @@
-"""Connection lifecycle and transaction import for Plaid and MX.
+"""Connection lifecycle and transaction import for Plaid.
 
 Imports are idempotent: accounts and transactions are upserted by provider ID, so a
 repeated webhook, a retried job, or an overlapping periodic run cannot double-count.
@@ -17,7 +17,6 @@ from typing import Any
 from . import db, keywords, ledger, security, store
 from .config import Config
 from .providers.base import ProviderError
-from .providers.mx import REAUTH_STATUSES, MxProvider
 from .providers.plaid import REAUTH_CODES, PlaidProvider
 from .store import AppError, category_names
 
@@ -28,7 +27,6 @@ class SyncService:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.plaid = PlaidProvider(config)
-        self.mx = MxProvider(config)
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
         self._queue: queue.Queue[str] = queue.Queue()
@@ -48,17 +46,6 @@ class SyncService:
         if not row:
             raise AppError("Connection not found.", 404)
         return row
-
-    def _mx_user_guid(self, user_id: int) -> str:
-        conn = db.connect()
-        guid = conn.execute("SELECT mx_user_guid FROM users WHERE id = ?", (user_id,)).fetchone()["mx_user_guid"]
-        if guid:
-            return guid
-        # A stable, non-identifying external id: MX never receives the user's email.
-        guid = self.mx.ensure_user(f"budgeit-user-{user_id}")
-        with db.tx() as tx:
-            tx.execute("UPDATE users SET mx_user_guid = ? WHERE id = ?", (guid, user_id))
-        return guid
 
     # --- Plaid linking ----------------------------------------------------------
 
@@ -107,58 +94,29 @@ class SyncService:
         known = {(row["name"], row["mask"]) for row in existing}
         return any((account["name"], account["mask"]) in known for account in accounts)
 
-    # --- MX linking -------------------------------------------------------------
-
-    def mx_widget_url(self, user_id: int, connection_id: str | None = None) -> dict[str, Any]:
-        member_guid = None
-        if connection_id:
-            connection = self._connection(user_id, connection_id)
-            if connection["provider"] != "mx":
-                raise AppError("That is not an MX connection.")
-            member_guid = connection["provider_item_id"]
-        return {"url": self.mx.widget_url(self._mx_user_guid(user_id), member_guid)}
-
-    def mx_discover(self, user_id: int) -> int:
-        """Record every MX member the user has connected, then import each one. Returns the member count."""
-        members = self.mx.members(self._mx_user_guid(user_id))
-        for member in members:
-            with db.tx() as conn:
-                conn.execute(
-                    "INSERT INTO connections (id, user_id, provider, provider_item_id, institution, institution_id, created_at) "
-                    "VALUES (?,?,?,?,?,?,?) ON CONFLICT (provider, provider_item_id) DO NOTHING",
-                    (db.new_id(), user_id, "mx", member["member_guid"], member["institution"], member["institution_id"], db.now()),
-                )
-        rows = db.connect().execute("SELECT id FROM connections WHERE user_id = ? AND provider = 'mx'", (user_id,)).fetchall()
-        for row in rows:
-            self.sync_connection(row["id"])
-        return len(members)
-
     # --- Sync -------------------------------------------------------------------
 
-    def sync_user(self, user_id: int, refresh: bool = False) -> None:
+    def sync_user(self, user_id: int) -> None:
         rows = db.connect().execute(
-            "SELECT id FROM connections WHERE user_id = ? AND provider NOT IN ('demo', 'csv', 'manual')", (user_id,)
+            "SELECT id FROM connections WHERE user_id = ? AND provider = 'plaid'", (user_id,)
         ).fetchall()
         for row in rows:
-            self.sync_connection(row["id"], refresh=refresh)
-
-    def sync_all(self) -> None:
-        for row in db.connect().execute("SELECT id FROM connections WHERE provider NOT IN ('demo', 'csv', 'manual')").fetchall():
             self.sync_connection(row["id"])
 
-    def sync_connection(self, connection_id: str, refresh: bool = False) -> None:
+    def sync_all(self) -> None:
+        for row in db.connect().execute("SELECT id FROM connections WHERE provider = 'plaid'").fetchall():
+            self.sync_connection(row["id"])
+
+    def sync_connection(self, connection_id: str) -> None:
         """Import the latest data for one connection. Failures are recorded on the connection, not raised."""
         with self._lock(connection_id):
             connection = db.connect().execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
-            if not connection or connection["provider"] in ("demo", "csv", "manual"):
+            if not connection or connection["provider"] != "plaid":
                 return
             with db.tx() as conn:
                 conn.execute("UPDATE connections SET last_attempt_at = ? WHERE id = ?", (db.now(), connection_id))
             try:
-                if connection["provider"] == "plaid":
-                    self._sync_plaid(connection)
-                else:
-                    self._sync_mx(connection, refresh)
+                self._sync_plaid(connection)
             except ProviderError as error:
                 status = "needs_reauth" if error.code in REAUTH_CODES else "error"
                 self._mark(connection_id, status, str(error))
@@ -179,25 +137,8 @@ class SyncService:
         self._apply(connection, accounts, changes["added"] + changes["modified"], removed=changes["removed"],
                     cursor=changes["cursor"])
 
-    def _sync_mx(self, connection, refresh: bool) -> None:
-        user_guid = self._mx_user_guid(connection["user_id"])
-        member_guid = connection["provider_item_id"]
-        if refresh:
-            self.mx.refresh(user_guid, member_guid)
-        status = self.mx.member_status(user_guid, member_guid)["status"]
-        days = 45 if connection["last_success_at"] else 170
-        accounts = self.mx.accounts(user_guid, member_guid)
-        transactions: list[dict[str, Any]] = []
-        for account in accounts:
-            transactions.extend(self.mx.transactions(user_guid, account["provider_account_id"], days))
-        window_start = (date.today() - timedelta(days=days)).isoformat()
-        self._apply(connection, accounts, transactions, pending_window_start=window_start)
-        if status in REAUTH_STATUSES:
-            self._mark(connection["id"], "needs_reauth", f"MX reports this connection as {status.lower()}. Reconnect to resume updates.")
-
     def _apply(self, connection, accounts: list[dict[str, Any]], transactions: list[dict[str, Any]], *,
-               removed: list[str] | None = None, cursor: str | None = None,
-               pending_window_start: str | None = None) -> None:
+               removed: list[str] | None = None, cursor: str | None = None) -> None:
         user_id, connection_id, stamp, day = connection["user_id"], connection["id"], db.now(), db.today()
         with db.tx() as conn:
             for account in accounts:
@@ -235,14 +176,6 @@ class SyncService:
             for provider_txn_id in removed or []:
                 conn.execute(f"DELETE FROM transactions WHERE provider_txn_id = ? AND account_id IN ({placeholders})",
                              (provider_txn_id, *scope))
-            if pending_window_start:
-                # Providers without a removal feed: drop pending rows that no longer exist upstream.
-                stale = conn.execute(
-                    f"SELECT id, provider_txn_id FROM transactions WHERE pending = 1 AND date >= ? AND account_id IN ({placeholders})",
-                    (pending_window_start, *scope)).fetchall()
-                for row in stale:
-                    if row["provider_txn_id"] not in seen:
-                        conn.execute("DELETE FROM transactions WHERE id = ?", (row["id"],))
             conn.execute(
                 "UPDATE connections SET cursor = COALESCE(?, cursor), status = 'healthy', error = NULL, last_success_at = ? WHERE id = ?",
                 (cursor, stamp, connection_id))
@@ -294,8 +227,6 @@ class SyncService:
             try:
                 if connection["provider"] == "plaid":
                     self.plaid.remove(security.decrypt(connection["secret_enc"]))
-                elif connection["provider"] == "mx":
-                    self.mx.remove(self._mx_user_guid(user_id), connection["provider_item_id"])
             except ProviderError as error:
                 if error.code not in REAUTH_CODES and connection["status"] == "healthy":
                     raise AppError(f"The provider did not confirm the disconnect, so nothing was deleted. {error}", 502) from error
@@ -341,23 +272,6 @@ class SyncService:
                 self._mark(connection["id"], "needs_reauth", "This institution needs you to sign in again.")
             elif code in ("LOGIN_REPAIRED", "NEW_ACCOUNTS_AVAILABLE"):
                 self.enqueue(connection["id"])
-
-    def handle_mx_webhook(self, event: dict[str, Any]) -> None:
-        member_guid = str(event.get("member_guid") or "")
-        kind = str(event.get("type") or "").upper()
-        key = "|".join(str(event.get(field) or "") for field in
-                       ("type", "action", "member_guid", "completed_at", "connection_status", "job_guid"))
-        if not member_guid or not self._first_delivery("mx", key):
-            return
-        connection = db.connect().execute(
-            "SELECT id FROM connections WHERE provider = 'mx' AND provider_item_id = ?", (member_guid,)).fetchone()
-        if not connection:
-            return
-        log.info("MX webhook %s for connection %s", kind, connection["id"])
-        if kind == "CONNECTION_STATUS" and str(event.get("connection_status") or "").upper() in REAUTH_STATUSES:
-            self._mark(connection["id"], "needs_reauth", "This institution needs you to sign in again.")
-        else:
-            self.enqueue(connection["id"])
 
     # --- Background worker ------------------------------------------------------
 

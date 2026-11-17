@@ -24,7 +24,6 @@ let csrf = '';
 let state = null;
 let month = monthKey(new Date());
 let stateLoadedAt = 0;
-let mxReconnect = false;
 
 // --- Formatting ---------------------------------------------------------------
 
@@ -220,7 +219,7 @@ function netWorth() {
   const sum = list => list.reduce((total, account) => total + account.balance_cents, 0);
   return {assets, debts, assetTotal: sum(assets), debtTotal: sum(debts), total: sum(included)};
 }
-const syncableConnections = () => state.connections.filter(connection => ['plaid', 'mx'].includes(connection.provider));
+const syncableConnections = () => state.connections.filter(connection => connection.provider === 'plaid');
 const realConnections = () => state.connections.filter(connection => !['demo', 'manual'].includes(connection.provider));
 
 // --- Rendering ----------------------------------------------------------------
@@ -242,14 +241,14 @@ function renderChrome() {
   $('#monthLabel').textContent = label.toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
   $('#nextMonth').disabled = month >= monthKey(new Date());
   $('#demoBanner').hidden = !state.has_demo;
-  // Only Plaid/MX connections can sync; CSV imports and manual accounts are updated by hand.
+  // Only Plaid connections can sync; CSV imports and manual accounts are updated by hand.
   const connections = syncableConnections();
   const latest = connections.map(connection => connection.last_success_at).filter(Boolean).sort().pop();
   const troubled = connections.some(connection => connection.status !== 'healthy');
   const handEntered = state.connections.some(connection => ['csv', 'manual'].includes(connection.provider));
   $('#syncChip').textContent = !connections.length ? (handEntered ? 'No linked accounts · CSV & manual data only' : 'No linked accounts')
     : troubled ? 'Connection needs attention' : latest ? `Synced ${ago(latest)}` : 'Not synced yet';
-  $('#syncChip').title = connections.length ? '' : 'Nothing is linked through Plaid or MX, so nothing syncs automatically. Import CSVs or edit manual accounts to update your data.';
+  $('#syncChip').title = connections.length ? '' : 'Nothing is linked through Plaid, so nothing syncs automatically. Import CSVs or edit manual accounts to update your data.';
   $('#syncPulse').style.background = !connections.length ? '#c4ccc6' : troubled ? '#d9a13b' : '#58a779';
 }
 
@@ -448,7 +447,7 @@ function institutionCard(connection, accounts) {
   const csv = connection.provider === 'csv';
   const manual = connection.provider === 'manual';
   const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : manual ? ['', 'Manual'] : (STATUS[connection.status] || STATUS.error);
-  const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
+  const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via Plaid · synced ${ago(connection.last_success_at)}`;
   const id = esc(connection.id);
   const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || KIND_LABELS[account.kind] || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? MINUS : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : manual ? manualNote(account) : `<div class="account-extra">${typeSelect(account)}</div>`}`).join('')
     || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
@@ -556,13 +555,9 @@ function renderProviders() {
   const providers = session.providers;
   const plaidText = !providers.plaid ? 'Not configured on this server'
     : providers.plaid_env === 'sandbox' ? 'Sandbox mode — Plaid test institutions only' : 'Most US banks and card issuers';
-  const mxText = !providers.mx ? 'Not configured on this server'
-    : providers.mx_env === 'production' ? 'Banks and credit unions via MX' : 'Integration mode — MX test institutions only';
   $('#plaidHint').textContent = plaidText;
-  $('#mxHint').textContent = mxText;
   $('#connectPlaid').disabled = !providers.plaid;
-  $('#connectMx').disabled = !providers.mx;
-  $('#providerStatus').innerHTML = `<div class="rule-row"><span><strong>Plaid</strong></span><span>${esc(plaidText)}</span></div><div class="rule-row"><span><strong>MX</strong></span><span>${esc(mxText)}</span></div>`;
+  $('#providerStatus').innerHTML = `<div class="rule-row"><span><strong>Plaid</strong></span><span>${esc(plaidText)}</span></div>`;
 }
 
 // --- Navigation and generic controls ------------------------------------------
@@ -888,8 +883,7 @@ $('#accountsList').addEventListener('click', event => {
     toast(`Syncing ${connection.institution}…`);
     act(() => api('POST', `/api/connections/${connection.id}/sync`), `${connection.institution} synced`);
   } else if (reconnect) {
-    if (connection.provider === 'plaid') startPlaid(connection.id);
-    else startMx(connection.id);
+    startPlaid(connection.id);
   } else if (disconnect && window.confirm(`Disconnect ${connection.institution}? Access is revoked at the provider and its accounts and transactions are removed from budge it.`)) {
     act(() => api('DELETE', `/api/connections/${connection.id}`), `${connection.institution} disconnected`);
   }
@@ -899,7 +893,6 @@ $('#connectButton').addEventListener('click', () => {
   $('#connectDialog').showModal();
 });
 $('#connectPlaid').addEventListener('click', () => startPlaid(null));
-$('#connectMx').addEventListener('click', () => startMx(null));
 
 // Plaid Link. The link token is remembered briefly so the flow can resume after a
 // bank's OAuth page redirects back here (always the case on phones).
@@ -944,39 +937,6 @@ function resumePlaidOAuth() {
   }
   openPlaid(saved.token, saved.connectionId, returnedTo);
 }
-
-// MX Connect Widget, embedded in an iframe served by MX.
-async function startMx(connectionId) {
-  $('#connectionStatus').textContent = 'Starting MX…';
-  const data = await act(() => api('POST', '/api/mx/widget-url', connectionId ? {connection_id: connectionId} : {}));
-  $('#connectionStatus').textContent = '';
-  if (!data) return;
-  if ($('#connectDialog').open) $('#connectDialog').close();
-  mxReconnect = Boolean(connectionId);
-  $('#mxFrame').src = data.widget.url;
-  $('#mxDialog').showModal();
-}
-function closeMx() {
-  if ($('#mxDialog').open) $('#mxDialog').close();
-  $('#mxFrame').src = 'about:blank';
-}
-async function importMx(announceEmpty) {
-  const data = await act(() => api('POST', '/api/mx/discover'));
-  if (!data) return;
-  if (data.members) toast(mxReconnect ? 'Connection updated' : `${data.members} MX institution${data.members === 1 ? '' : 's'} imported`);
-  else if (announceEmpty) toast('MX has no finished connections yet.');
-}
-$('#mxClose').addEventListener('click', closeMx);
-$('#mxDialog').addEventListener('cancel', () => { $('#mxFrame').src = 'about:blank'; });
-$('#mxDone').addEventListener('click', () => { closeMx(); go('accounts'); importMx(true); });
-window.addEventListener('message', event => {
-  let host = '';
-  try { host = new URL(event.origin).hostname; } catch { return; }
-  if (!/(^|\.)(mx\.com|moneydesktop\.com)$/.test(host)) return;
-  let data = event.data;
-  if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
-  if (data && data.type === 'mx/connect/memberConnected') importMx(false);
-});
 
 // --- Settings -----------------------------------------------------------------
 

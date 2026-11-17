@@ -56,8 +56,7 @@ def serve(config: Config) -> None:
     sync.start()
     server = make_server(config, sync)
     log.info("budge it listening on http://%s:%s (public URL %s)", config.host, config.port, config.public_url)
-    log.info("Providers: Plaid %s (%s), MX %s", "on" if config.plaid_configured else "off", config.plaid_env,
-             "on" if config.mx_configured else "off")
+    log.info("Providers: Plaid %s (%s)", "on" if config.plaid_configured else "off", config.plaid_env)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
