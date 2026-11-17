@@ -54,8 +54,25 @@ an `https://` `PUBLIC_URL`.
 
 ## Manual data while a provider is unavailable
 
-**Import CSVs** (Accounts → ↑ Import CSV). Chase card activity and Capital One
-account exports are recognised by their column headers. Re-importing the same
+**Account types.** The Accounts tab is grouped into **Credit cards**, **Bank
+accounts**, **Investments** and **Loans & other**, each with its own total. When you
+import a CSV the type is assumed from the file's columns and shown in the dialog
+("Detected: …") so you can change it before importing; afterwards every account has a
+**Type** dropdown (CSV, manual, and Plaid/MX accounts alike, so a provider's
+guess can be corrected and the sync will not undo it). The type decides the section,
+and credit cards are the ones that count payments from other accounts.
+
+| File | Columns that identify it | Assumed type |
+|---|---|---|
+| Chase card activity | `Transaction Date, Post Date, Description, Category, Type, Amount, Memo` | Credit card |
+| Capital One credit card | `Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit` | Credit card |
+| Capital One checking / savings | `Account Number, Transaction Description, Transaction Date, Transaction Type, Transaction Amount, Balance` | Bank account (savings if the name says so) |
+
+No investment export format is recognised yet; choose **Investment** by hand
+(or add the account under Net worth → Manual accounts).
+
+**Import CSVs** (Accounts → ↑ Import CSV). The three formats above are recognised by
+their column headers. Re-importing the same
 account skips rows already imported. Categories are guessed from the merchant text
 using the keyword list in **Settings → Auto-categorization keywords** (editable);
 categories you set yourself are never overwritten. Imported CSV rows can be edited
@@ -65,7 +82,7 @@ categories you set yourself are never overwritten. Imported CSV rows can be edit
 `anchor + transactions dated after the anchor date`, and it feeds net worth like
 any other account:
 
-- A **Capital One** file carries a `Balance` column, so its newest row anchors the
+- A **Capital One bank** file carries a `Balance` column, so its newest row anchors the
   account automatically.
 - A **Chase** file has no balance. Until you press **Set balance** (enter what the
   bank shows, whether you owe it, and the date), the card shows an estimate from

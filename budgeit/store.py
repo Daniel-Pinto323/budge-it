@@ -26,6 +26,7 @@ DEFAULT_CATEGORIES = [
     ("Everyday", "Zelle", "#7a6fb0", 0),
 ]
 MAX_TRANSACTIONS = 5000
+ACCOUNT_KINDS = ('credit', 'depository', 'investment', 'loan', 'other')
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -115,7 +116,7 @@ def state(user_id: int) -> dict[str, Any]:
         "FROM connections WHERE user_id = ? ORDER BY created_at", (user_id,)
     ).fetchall()
     accounts = conn.execute(
-        "SELECT id, connection_id, name, kind, subtype, mask, currency, balance_cents, available_cents, balance_at, included, "
+        "SELECT id, connection_id, name, COALESCE(kind_override, kind) AS kind, subtype, mask, currency, balance_cents, available_cents, balance_at, included, "
         "anchor_cents, anchor_date, payment_match "
         "FROM accounts WHERE user_id = ? ORDER BY kind, name", (user_id,)
     ).fetchall()
@@ -292,6 +293,12 @@ def update_account(user_id: int, account_id: str, data: dict[str, Any]) -> None:
             raise AppError("Account not found.", 404)
         if "included" in data:
             conn.execute("UPDATE accounts SET included = ? WHERE id = ?", (int(bool(data["included"])), account_id))
+        if "kind" in data:
+            if data["kind"] not in ACCOUNT_KINDS:
+                raise AppError("Unknown account type.")
+            # Synced providers rewrite `kind` on every sync, so their accounts keep the user's choice separately.
+            column = "kind" if account["provider"] in ("csv", "manual") else "kind_override"
+            conn.execute(f"UPDATE accounts SET {column} = ? WHERE id = ?", (data["kind"], account_id))
         if {"payment_match", "amount"} & data.keys() and account["provider"] != "csv":
             raise AppError("Only CSV-imported accounts have a transaction-based balance.", 403)
         if "payment_match" in data:
@@ -318,6 +325,13 @@ def _manual_fields(data: dict[str, Any]) -> tuple[str, str | None, int]:
     label = _text(data.get("subtype"), "Type", 30, required=False) or None
     cents = _cents(data.get("amount"), "Amount")
     return name, label, -cents if data.get("liability") else cents
+
+
+def _manual_kind(data: dict[str, Any], fallback: str | None = None) -> str:
+    kind = data.get("kind")
+    if kind in ACCOUNT_KINDS:
+        return kind
+    return fallback or ("loan" if data.get("liability") else "other")
 
 
 def _record_balance(conn, account_id: str, cents: int) -> None:
@@ -351,7 +365,7 @@ def add_manual_account(user_id: int, data: dict[str, Any]) -> None:
         account_id = db.new_id()
         conn.execute("INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, balance_cents) "
                      "VALUES (?,?,?,?,?,?,?,0)", (account_id, user_id, connection_id, account_id, name,
-                                                  "loan" if data.get("liability") else "other", label))
+                                                  _manual_kind(data), label))
         _record_balance(conn, account_id, cents)
 
 
@@ -359,8 +373,9 @@ def update_manual_account(user_id: int, account_id: str, data: dict[str, Any]) -
     name, label, cents = _manual_fields(data)
     with db.tx() as conn:
         _manual_account(conn, user_id, account_id)
+        current = conn.execute("SELECT kind FROM accounts WHERE id = ?", (account_id,)).fetchone()["kind"]
         conn.execute("UPDATE accounts SET name = ?, subtype = ?, kind = ? WHERE id = ?",
-                     (name, label, "loan" if data.get("liability") else "other", account_id))
+                     (name, label, _manual_kind(data, current), account_id))
         _record_balance(conn, account_id, cents)
 
 

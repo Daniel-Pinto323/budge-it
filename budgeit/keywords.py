@@ -7,7 +7,7 @@ wins, so "uber eats" beats "uber" without any ordering to manage.
 from __future__ import annotations
 
 DEFAULTS: dict[str, list[str]] = {
-    "Transfer": ["autopay", "crcardpmt", "credit crd", "transfer", "performance savings"],
+    "Transfer": ["autopay", "crcardpmt", "credit crd", "transfer", "performance savings", "360 checking", "fid bkg svc", "coinbase"],
     "Income": ["payroll", "direct dep", "interest paid"],
     "Zelle": ["zelle"],
     "Dining": ["uber eats", "ubereats", "doordash", "grubhub", "seamless", "postmates", "starbucks", "dunkin",
@@ -16,11 +16,19 @@ DEFAULTS: dict[str, list[str]] = {
                        "exxon", "chevron", "sunoco"],
     "Subscriptions": ["netflix", "spotify", "hulu", "disney plus", "disney+", "apple.com/bill", "amazon prime",
                       "prime video", "youtube", "icloud"],
-    "Groceries": ["whole foods", "trader joe", "kroger", "safeway", "aldi", "publix", "wegmans", "instacart", "costco"],
+    "Groceries": ["whole foods", "trader joe", "kroger", "safeway", "aldi", "publix", "wegmans", "instacart", "costco", "marianos", "jewel"],
     "Utilities": ["comcast", "xfinity", "verizon", "at&t", "t-mobile", "con edison", "electric"],
     "Travel": ["airlines", "delta air", "united air", "american air", "southwest", "airbnb", "marriott", "hilton",
                "hotel", "expedia"],
     "Shopping": ["amazon", "amzn", "target", "walmart", "best buy", "etsy", "ebay"],
+}
+
+
+# Keywords added after the first release; the schema upgrade that introduced them adds just these (and only these)
+# to existing users, so a default someone deliberately deleted is not revived.
+ADDED_IN_SCHEMA_4: dict[str, list[str]] = {
+    "Transfer": ["360 checking", "fid bkg svc", "coinbase"],
+    "Groceries": ["marianos", "jewel"],
 }
 
 

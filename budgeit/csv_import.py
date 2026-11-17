@@ -1,4 +1,8 @@
-"""Manual import of card-activity CSV exports (Chase format) while a live provider is unavailable.
+"""Manual import of CSV exports while a live provider is unavailable.
+
+Recognised by their column headers (see _rows): Chase card activity, Capital One credit-card downloads
+(Debit/Credit columns) and Capital One bank accounts (checking/savings, with a running Balance). The
+account type (credit card / bank / investment) is assumed from the schema and can be overridden.
 
 Each imported card becomes a connection with provider = 'csv'. Rows get a stable ID derived from
 their contents, so re-importing an overlapping file never double-counts, and categories the user
@@ -24,7 +28,12 @@ CATEGORY_HINTS = {
     "food & drink": "Dining", "shopping": "Shopping", "groceries": "Groceries", "bills & utilities": "Utilities",
     "gas": "Transportation", "automotive": "Transportation", "travel": "Travel", "entertainment": "Fun money",
     "gifts & donations": "Gifts", "personal": "Fun money",
+    # Capital One card categories
+    "merchandise": "Shopping", "dining": "Dining", "gas/automotive": "Transportation", "airfare": "Travel",
+    "lodging": "Travel", "other travel": "Travel", "phone/cable": "Utilities",
 }
+IMPORT_KINDS = ("credit", "depository", "investment")
+ISSUERS = ("capital one", "american express", "bank of america", "wells fargo", "discover", "citi", "chase")
 _REQUIRED = ("transaction date", "description", "amount")
 
 
@@ -54,24 +63,34 @@ def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
     fields = {(name or "").strip().lower(): name for name in (reader.fieldnames or [])}
     chase = all(column in fields for column in ("transaction date", "description", "amount"))
     capital_one = all(column in fields for column in ("transaction description", "transaction date", "transaction type", "transaction amount"))
-    if not (chase or capital_one):
+    card = all(column in fields for column in ("transaction date", "card no.", "description", "debit", "credit"))
+    if not (chase or capital_one or card):
         raise AppError("Unrecognised CSV. Supported: Chase card activity (Transaction Date, Description, Category, Type, "
-                       "Amount) and Capital One (Transaction Description, Transaction Date, Transaction Type, Transaction Amount).")
+                       "Amount), Capital One credit cards (Transaction Date, Card No., Description, Category, Debit, Credit) "
+                       "and Capital One bank accounts (Transaction Description, Transaction Date, Transaction Type, "
+                       "Transaction Amount, Balance).")
     rows: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
     for line in reader:
         get = lambda key: (line.get(fields.get(key, "")) or "").strip()  # noqa: E731
-        if not get("transaction date") and not get("transaction amount" if capital_one else "amount"):
+        if not get("transaction date") and not (get("transaction amount") or get("amount") or get("debit") or get("credit")):
             continue
         if len(rows) >= MAX_ROWS:
             raise AppError(f"Files are limited to {MAX_ROWS} transactions.")
         day = _date(get("transaction date"))
-        if chase:
+        if card:
+            description, post, memo, category = get("description"), get("posted date"), get("card no."), get("category") or None
+            # Debit is a purchase (money out); Credit is a payment or refund (money in).
+            amount = (_cents(get("debit")) if get("debit") else 0) - (_cents(get("credit")) if get("credit") else 0)
+            transfer, balance = (category or "").lower().startswith("payment"), None
+            last4 = re.sub(r"\D", "", memo)[-4:] or None
+        elif chase:
             description, post, memo = get("description"), get("post date"), get("memo")
             # Chase shows card spending as negative; the app stores spending as positive.
             amount, category = -_cents(get("amount")), get("category") or None
             transfer = get("type").lower() == "payment"
             balance = None
+            last4 = None
         else:
             description, post, memo, category = get("transaction description"), "", get("account number"), None
             # Capital One amounts are unsigned; the Debit/Credit type gives the direction.
@@ -79,13 +98,14 @@ def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
             amount = magnitude if get("transaction type").lower() == "debit" else -magnitude
             transfer = False
             balance = _cents(get("balance")) if get("balance") else None
+            last4 = re.sub(r"\D", "", memo)[-4:] or None
         description = description[:120] or "Unknown"
         digest = "|".join((day, post, description, str(amount), memo))
         seen[digest] = seen.get(digest, 0) + 1
         rows.append({
             "provider_txn_id": hashlib.sha256(f"{digest}#{seen[digest]}".encode()).hexdigest()[:32],
             "date": day, "merchant": description, "amount_cents": amount, "provider_category": category,
-            "transfer": transfer, "balance_cents": balance,
+            "transfer": transfer, "balance_cents": balance, "last4": last4,
         })
     if not rows:
         raise AppError("No transactions found in that file.")
@@ -96,6 +116,24 @@ def parse(text: str) -> list[dict[str, Any]]:
     return _rows(text)[1]
 
 
+def _subtype(kind: str, name: str) -> str:
+    if kind == "credit":
+        return "credit card"
+    if kind == "investment":
+        return "brokerage"
+    return "savings" if "saving" in name.lower() else "checking"
+
+
+def _issuer_phrase(name: str) -> str | None:
+    """Default text that identifies payments to this card in other accounts: the issuer, else the first word."""
+    lowered = name.lower()
+    for issuer in ISSUERS:
+        if lowered.startswith(issuer):
+            return issuer
+    first = lowered.split()[0]
+    return first if len(first) >= 3 else None
+
+
 def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
     text = data.get("csv")
     if not isinstance(text, str) or not text.strip():
@@ -103,8 +141,9 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
     name = re.sub(r"\s+", " ", str(data.get("account") or "")).strip()[:60]
     if not name:
         raise AppError("Account name is required.")
-    mask = re.sub(r"\D", "", str(data.get("mask") or ""))[:4] or None
-    kind, rows = _rows(text)
+    detected, rows = _rows(text)
+    kind = data.get("kind") if data.get("kind") in IMPORT_KINDS else detected  # applies to new accounts; edit it later in Accounts
+    mask = re.sub(r"\D", "", str(data.get("mask") or ""))[:4] or next((row["last4"] for row in rows if row["last4"]), None)
     stamp = db.now()
     added = 0
     with db.tx() as conn:
@@ -131,12 +170,12 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
             account_id = db.new_id()
             # Balance is derived from transactions (see ledger.py). Cards default to counting payments from
             # other accounts that mention the issuer's first word, e.g. "chase"; this is editable per account.
-            first_word = name.split()[0].lower()
+            phrase = _issuer_phrase(name)
             conn.execute(
                 "INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, mask, "
                 "balance_cents, included, payment_match) VALUES (?,?,?,?,?,?,?,?,0,1,?)",
-                (account_id, user_id, connection_id, "csv", name, kind, "checking" if kind == "depository" else "credit card",
-                 mask, first_word if kind == "credit" and len(first_word) >= 3 else None))
+                (account_id, user_id, connection_id, "csv", name, kind, _subtype(kind, name), mask,
+                 phrase if kind == "credit" else None))
         keyword_rules = keyword_pairs(conn, user_id)
         recategorized = 0
         for row in rows:

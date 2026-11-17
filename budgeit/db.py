@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE users (
@@ -66,6 +66,7 @@ CREATE TABLE accounts (
     anchor_cents INTEGER NOT NULL DEFAULT 0,  -- CSV accounts: a known balance ...
     anchor_date TEXT,                         -- ... as of this day (NULL = count every transaction)
     payment_match TEXT,                       -- CSV cards: text identifying payments made from other accounts
+    kind_override TEXT,                       -- user-chosen account type for provider accounts (sync rewrites kind)
     UNIQUE (connection_id, provider_account_id)
 );
 CREATE TABLE transactions (
@@ -152,10 +153,12 @@ def init(path: Path) -> None:
     if version == 0:
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif version in (1, 2):
+    elif version in (1, 2, 3):
         if version == 1:
             _migrate_1_to_2(conn)
-        _migrate_2_to_3(conn)
+        if version <= 2:
+            _migrate_2_to_3(conn)
+        _migrate_3_to_4(conn)
     elif version != SCHEMA_VERSION:
         raise SystemExit(f"Database schema version {version} is not supported by this build.")
     path.chmod(0o600)
@@ -213,6 +216,25 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
         for user in conn.execute("SELECT id FROM users").fetchall():
             ledger.recompute(conn, user["id"])
         conn.execute("PRAGMA user_version = 3")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    from . import keywords
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE accounts ADD COLUMN kind_override TEXT")
+        for user in conn.execute("SELECT id FROM users").fetchall():
+            names = {row[0] for row in conn.execute("SELECT name FROM categories WHERE user_id = ?", (user["id"],))}
+            for category, words in keywords.ADDED_IN_SCHEMA_4.items():
+                if category in names or category in ("Transfer", "Income"):
+                    for word in words:
+                        conn.execute("INSERT OR IGNORE INTO keyword_rules (id, user_id, keyword, category) VALUES (?,?,?,?)",
+                                     (new_id(), user["id"], word, category))
+        conn.execute("PRAGMA user_version = 4")
     except BaseException:
         conn.execute("ROLLBACK")
         raise

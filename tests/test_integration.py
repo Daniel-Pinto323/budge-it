@@ -538,6 +538,45 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"amount": 1})[0], 403)
         self.assertEqual(self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"included": True})[0], 200)
 
+    def test_40_account_types_are_assumed_from_schema_and_editable(self):
+        def account(state, name):
+            return next(a for a in state["accounts"] if a["name"] == name)
+
+        card = ("Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit\n"
+                "2026-11-13,2026-11-14,6793,MARIANOS #538,Merchandise,58.57,\n"
+                "2026-11-09,2026-11-10,6793,BRFACTORY.COM,Merchandise,,87.02\n"
+                "2026-10-22,2026-10-22,6793,CAPITAL ONE AUTOPAY PYMT,Payment/Credit,,300.00\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": card, "account": "Capital One Venture"})[1]["state"]
+        venture = account(state, "Capital One Venture")
+        self.assertEqual((venture["kind"], venture["mask"], venture["payment_match"]), ("credit", "6793", "capital one"))
+        txns = {t["merchant"]: t for t in state["transactions"] if t["account"].startswith("Capital One Venture")}
+        self.assertEqual((txns["MARIANOS #538"]["amount"], txns["MARIANOS #538"]["category"]), (5857, "Groceries"))
+        self.assertEqual(txns["BRFACTORY.COM"]["amount"], -8702)  # a credit is money back
+        self.assertEqual(txns["CAPITAL ONE AUTOPAY PYMT"]["category"], "Transfer")
+        self.assertEqual(venture["balance_cents"], 32845)  # unanchored estimate
+        # The same payment appears as a checking withdrawal: counted once, not twice.
+        bank = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
+                "1358,Withdrawal from CAPITAL ONE CRCARDPMT,10/22/26,Debit,300,5392.09\n"
+                "1358,Monthly Interest Paid,10/31/26,Credit,1.5,5393.59\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": bank, "account": "360 Performance Savings"})[1]["state"]
+        savings = account(state, "360 Performance Savings")
+        self.assertEqual((savings["kind"], savings["subtype"], savings["balance_cents"]), ("depository", "savings", 539359))
+        self.assertEqual(account(state, "Capital One Venture")["balance_cents"], 32845)
+        # Types are editable: CSV accounts, provider accounts (override survives), and manual accounts.
+        state = self.client.request("PATCH", f"/api/accounts/{savings['id']}", {"kind": "investment"})[1]["state"]
+        self.assertEqual(account(state, "360 Performance Savings")["kind"], "investment")
+        self.assertEqual(self.client.request("PATCH", f"/api/accounts/{savings['id']}", {"kind": "bogus"})[0], 400)
+        plaid = next(a for a in state["accounts"] if a["name"] == "Plaid Credit Card")
+        state = self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"kind": "loan"})[1]["state"]
+        self.assertEqual(next(a for a in state["accounts"] if a["id"] == plaid["id"])["kind"], "loan")
+        self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"kind": "credit"})
+        state = self.client.request("POST", "/api/manual-accounts", {"name": "Roth IRA", "kind": "investment", "amount": 500000})[1]["state"]
+        roth = account(state, "Roth IRA")
+        self.assertEqual(roth["kind"], "investment")
+        state = self.client.request("PATCH", f"/api/manual-accounts/{roth['id']}", {"name": "Roth IRA", "amount": 600000})[1]["state"]
+        self.assertEqual(account(state, "Roth IRA")["kind"], "investment")  # editing the amount keeps the type
+        self.client.request("DELETE", f"/api/manual-accounts/{roth['id']}", {})
+
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()
         before = state["net_worth_history"][-1]["total"]
