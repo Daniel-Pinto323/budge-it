@@ -14,7 +14,7 @@ import time
 from datetime import date, timedelta
 from typing import Any
 
-from . import db, keywords, security, store
+from . import db, keywords, ledger, security, store
 from .config import Config
 from .providers.base import ProviderError
 from .providers.mx import REAUTH_STATUSES, MxProvider
@@ -246,6 +246,7 @@ class SyncService:
             conn.execute(
                 "UPDATE connections SET cursor = COALESCE(?, cursor), status = 'healthy', error = NULL, last_success_at = ? WHERE id = ?",
                 (cursor, stamp, connection_id))
+            ledger.recompute(conn, user_id)  # synced transfers can be payments toward CSV-tracked cards
 
     @staticmethod
     def _upsert_transaction(conn, user_id, account_id, item, rules, kw_rules, names, placeholders, scope, stamp) -> None:
@@ -299,6 +300,7 @@ class SyncService:
                 log.warning("Provider revoke failed for an already-broken connection %s; deleting local data.", connection["id"])
             with db.tx() as conn:
                 conn.execute("DELETE FROM connections WHERE id = ?", (connection["id"],))
+                ledger.recompute(conn, user_id)
 
     def disconnect_all(self, user_id: int) -> None:
         for row in db.connect().execute("SELECT id FROM connections WHERE user_id = ?", (user_id,)).fetchall():

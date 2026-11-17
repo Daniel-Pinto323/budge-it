@@ -15,7 +15,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from . import db, keywords
+from . import db, keywords, ledger
 from .store import AppError, category_names, keyword_pairs
 
 MAX_ROWS = 5000
@@ -129,13 +129,14 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
             account_id = account["id"]
         else:
             account_id = db.new_id()
-            # Card exports carry no balance, so keep those out of net worth until the user decides otherwise.
+            # Balance is derived from transactions (see ledger.py). Cards default to counting payments from
+            # other accounts that mention the issuer's first word, e.g. "chase"; this is editable per account.
+            first_word = name.split()[0].lower()
             conn.execute(
                 "INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, mask, "
-                "balance_cents, included) VALUES (?,?,?,?,?,?,?,?,0,?)",
+                "balance_cents, included, payment_match) VALUES (?,?,?,?,?,?,?,?,0,1,?)",
                 (account_id, user_id, connection_id, "csv", name, kind, "checking" if kind == "depository" else "credit card",
-                 mask, int(kind == "depository" and rows[0]["balance_cents"] is not None)))
-        latest = conn.execute("SELECT MAX(date) AS day FROM transactions WHERE account_id = ?", (account_id,)).fetchone()["day"]
+                 mask, first_word if kind == "credit" and len(first_word) >= 3 else None))
         keyword_rules = keyword_pairs(conn, user_id)
         recategorized = 0
         for row in rows:
@@ -165,11 +166,13 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
                 "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?)",
                 (db.new_id(), user_id, account_id, row["provider_txn_id"], row["date"], row["merchant"], row["amount_cents"],
                  category, source, row["provider_category"], stamp, stamp))
-        # Exports that carry a running balance keep the account's balance current (newest row wins).
+        # Exports that carry a running balance re-anchor the account (newest day wins; an older file never rewinds it).
         dated = [row for row in rows if row["balance_cents"] is not None]
-        if dated and (latest is None or max(row["date"] for row in dated) >= latest):
-            newest = max(dated, key=lambda row: row["date"])  # stable: first of the newest day = file's newest row
-            conn.execute("UPDATE accounts SET balance_cents = ?, balance_at = ? WHERE id = ?", (newest["balance_cents"], stamp, account_id))
-            conn.execute("INSERT OR REPLACE INTO balance_snapshots (account_id, day, balance_cents) VALUES (?,?,?)",
-                         (account_id, db.today(), newest["balance_cents"]))
+        if dated:
+            newest = max(dated, key=lambda row: row["date"])  # stable: first of the newest day = the file's newest row
+            anchor = conn.execute("SELECT anchor_date FROM accounts WHERE id = ?", (account_id,)).fetchone()["anchor_date"]
+            if anchor is None or newest["date"] >= anchor:
+                conn.execute("UPDATE accounts SET anchor_cents = ?, anchor_date = ? WHERE id = ?",
+                             (newest["balance_cents"], newest["date"], account_id))
+        ledger.recompute(conn, user_id)
     return {"added": added, "skipped": len(rows) - added, "recategorized": recategorized}

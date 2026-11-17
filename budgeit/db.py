@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE users (
@@ -63,6 +63,9 @@ CREATE TABLE accounts (
     available_cents INTEGER,
     balance_at TEXT,
     included INTEGER NOT NULL DEFAULT 1,
+    anchor_cents INTEGER NOT NULL DEFAULT 0,  -- CSV accounts: a known balance ...
+    anchor_date TEXT,                         -- ... as of this day (NULL = count every transaction)
+    payment_match TEXT,                       -- CSV cards: text identifying payments made from other accounts
     UNIQUE (connection_id, provider_account_id)
 );
 CREATE TABLE transactions (
@@ -149,8 +152,10 @@ def init(path: Path) -> None:
     if version == 0:
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif version == 1:
-        _migrate_1_to_2(conn)
+    elif version in (1, 2):
+        if version == 1:
+            _migrate_1_to_2(conn)
+        _migrate_2_to_3(conn)
     elif version != SCHEMA_VERSION:
         raise SystemExit(f"Database schema version {version} is not supported by this build.")
     path.chmod(0o600)
@@ -183,6 +188,31 @@ def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
         for row in conn.execute("SELECT id FROM users").fetchall():
             seed_keyword_rules(conn, row[0])
         conn.execute("PRAGMA user_version = 2")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    from . import ledger
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE accounts ADD COLUMN anchor_cents INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE accounts ADD COLUMN anchor_date TEXT")
+        conn.execute("ALTER TABLE accounts ADD COLUMN payment_match TEXT")
+        for row in conn.execute("SELECT a.id, a.kind, a.name, a.balance_cents FROM accounts a "
+                                "JOIN connections c ON c.id = a.connection_id WHERE c.provider = 'csv'").fetchall():
+            if row["kind"] == "depository":
+                # Their balance came from the file's Balance column, as of the newest imported day.
+                conn.execute("UPDATE accounts SET anchor_cents = ?, anchor_date = "
+                             "(SELECT MAX(date) FROM transactions WHERE account_id = accounts.id) WHERE id = ?",
+                             (row["balance_cents"], row["id"]))
+            elif row["kind"] == "credit" and len(row["name"].split()[0]) >= 3:
+                conn.execute("UPDATE accounts SET payment_match = ? WHERE id = ?", (row["name"].split()[0].lower(), row["id"]))
+        for user in conn.execute("SELECT id FROM users").fetchall():
+            ledger.recompute(conn, user["id"])
+        conn.execute("PRAGMA user_version = 3")
     except BaseException:
         conn.execute("ROLLBACK")
         raise

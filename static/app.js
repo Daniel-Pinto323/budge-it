@@ -372,6 +372,16 @@ function renderTransactions() {
     : `${matches.length} transaction${matches.length === 1 ? '' : 's'}`;
 }
 
+function ledgerNote(account) {
+  const basis = account.anchor_date
+    ? `Balance is ${precise(Math.abs(account.anchor_cents))}${account.anchor_cents < 0 ? ' owed' : ''} on ${shortDate(account.anchor_date)}, plus transactions since.`
+    : 'Estimated from imported transactions only. Set your actual balance to anchor it.';
+  const payments = account.kind === 'credit'
+    ? `<label class="payment-match">Count payments from other accounts containing <input data-payment-match="${esc(account.id)}" value="${esc(account.payment_match || '')}" maxlength="40" placeholder="e.g. chase credit crd" /></label>`
+    : '';
+  return `<div class="account-extra"><span>${basis}</span><button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set balance</button>${payments}</div>`;
+}
+
 function renderAccounts() {
   const connections = state.connections;
   const real = realConnections();
@@ -386,7 +396,7 @@ function renderAccounts() {
     const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : manual ? ['', 'Manual'] : (STATUS[connection.status] || STATUS.error);
     const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
     const id = esc(connection.id);
-    const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>`).join('')
+    const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : ''}`).join('')
       || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
     const actions = demo || manual ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
     return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
@@ -665,12 +675,30 @@ $('#importCsvForm').addEventListener('submit', async event => {
 });
 
 $('#accountsList').addEventListener('change', event => {
+  const matchId = event.target.dataset.paymentMatch;
+  if (matchId) {
+    act(() => api('PATCH', `/api/accounts/${matchId}`, {payment_match: event.target.value.trim()}), 'Payment matching updated');
+    return;
+  }
   const id = event.target.dataset.account;
   if (!id) return;
   const included = event.target.checked;
   act(() => api('PATCH', `/api/accounts/${id}`, {included}), `Account ${included ? 'included in' : 'excluded from'} net worth`);
 });
 $('#accountsList').addEventListener('click', event => {
+  const balanceId = event.target.dataset.setBalance;
+  if (balanceId) {
+    const account = state.accounts.find(item => item.id === balanceId);
+    if (!account) return;
+    const form = $('#setBalanceForm');
+    form.dataset.id = balanceId;
+    $('#setBalanceTitle').textContent = `Set balance — ${account.name}`;
+    form.elements.owed.value = (account.balance_cents < 0 || (account.kind === 'credit' && !account.balance_cents)) ? '1' : '';
+    form.elements.amount.value = (Math.abs(account.balance_cents) / 100).toFixed(2);
+    form.elements.as_of.value = todayISO();
+    $('#setBalanceDialog').showModal();
+    return;
+  }
   const {sync, reconnect, disconnect} = event.target.dataset;
   const connection = state.connections.find(item => item.id === (sync || reconnect || disconnect));
   if (!connection) return;
@@ -860,4 +888,11 @@ $('#manualAccountForm').addEventListener('submit', async event => {
   const id = form.dataset.id;
   const ok = await act(() => id ? api('PATCH', `/api/manual-accounts/${id}`, body) : api('POST', '/api/manual-accounts', body), id ? 'Account updated' : 'Account added');
   if (ok) $('#manualAccountDialog').close();
+});
+
+$('#setBalanceForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = {amount: toCents(form.elements.amount.value), owed: form.elements.owed.value === '1', as_of: form.elements.as_of.value};
+  if (await act(() => api('PATCH', `/api/accounts/${form.dataset.id}`, body), 'Balance set')) $('#setBalanceDialog').close();
 });

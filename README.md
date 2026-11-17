@@ -52,6 +52,41 @@ re-syncs every `SYNC_INTERVAL_MINUTES` (default 6 hours), on demand from the
 Sync buttons, and immediately on provider webhooks when the server is reachable at
 an `https://` `PUBLIC_URL`.
 
+## Manual data while a provider is unavailable
+
+**Import CSVs** (Accounts → ↑ Import CSV). Chase card activity and Capital One
+account exports are recognised by their column headers. Re-importing the same
+account skips rows already imported. Categories are guessed from the merchant text
+using the keyword list in **Settings → Auto-categorization keywords** (editable);
+categories you set yourself are never overwritten. Imported CSV rows can be edited
+(merchant, date, amount, category) from the Activity page.
+
+**Balances follow the transactions.** Each CSV account's balance is
+`anchor + transactions dated after the anchor date`, and it feeds net worth like
+any other account:
+
+- A **Capital One** file carries a `Balance` column, so its newest row anchors the
+  account automatically.
+- A **Chase** file has no balance. Until you press **Set balance** (enter what the
+  bank shows, whether you owe it, and the date), the card shows an estimate from
+  imported transactions only. After that, only transactions dated after your date
+  move it. Spending lowers a balance; refunds and payments raise it.
+- **Card payments from other accounts.** A Transfer-category transaction in another
+  account (for example `Withdrawal from CHASE CREDIT CRD AUTOPAY` in checking)
+  reduces a card's debt when its text contains the card's "payments containing…"
+  phrase (default: the first word of the account name, such as `chase`; editable
+  under the card). If the card's own export lists the same payment (same amount, within
+  5 days) it is counted once. A payment that matches several cards and is listed by
+  none is left out rather than guessed, so give each card a more specific phrase.
+- Only **CSV-imported** accounts work this way. Plaid and MX accounts keep the
+  balances their provider reports.
+- Manual transactions are not tied to an account yet, so they do not move any
+  balance.
+
+**Manual accounts** (Net worth → Manual accounts) track things no provider links,
+such as a 401(k), home or loan. Enter the amount whenever it changes; each value is
+kept in the net worth history.
+
 ## Self-hosting (for example in a Proxmox container)
 
 The app is one Python process with a SQLite file. It needs an always-on machine,

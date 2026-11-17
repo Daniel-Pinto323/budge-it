@@ -251,7 +251,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             ("POST", "/api/transactions", lambda u, d: store.add_manual_transaction(u, d)),
             ("PATCH", f"/api/transactions/{ID}", lambda u, d, i: store.update_transaction(u, i, d)),
             ("DELETE", f"/api/transactions/{ID}", lambda u, d, i: store.delete_manual_transaction(u, i)),
-            ("PATCH", f"/api/accounts/{ID}", lambda u, d, i: store.set_account_included(u, i, bool(d.get("included")))),
+            ("PATCH", f"/api/accounts/{ID}", lambda u, d, i: store.update_account(u, i, d)),
             ("POST", "/api/manual-accounts", lambda u, d: store.add_manual_account(u, d)),
             ("PATCH", f"/api/manual-accounts/{ID}", lambda u, d, i: store.update_manual_account(u, i, d)),
             ("DELETE", f"/api/manual-accounts/{ID}", lambda u, d, i: store.delete_manual_account(u, i)),

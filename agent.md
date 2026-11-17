@@ -187,6 +187,12 @@ This file records a plan, not implemented code or verified production approval. 
 - Validate Plaid product and institution coverage, then implement the server-side Sandbox flow before considering any live Chase or Capital One data.
 - Implement authentication, token encryption, verified webhooks, idempotent sync jobs, disconnect/deletion, deployment, and the production security baseline described above.
 
+## Manual data and balances — 2026-11-17
+
+- CSV import (Chase card activity, Capital One account exports) is implemented in `budgeit/csv_import.py`. Imports are idempotent; categories come from editable keyword rules (`budgeit/keywords.py`, Settings UI), then the bank's own category. Manual net-worth accounts (401(k), home, loans) live on the Net worth page.
+- CSV accounts have ledger-derived balances (`budgeit/ledger.py`): `balance = anchor + transactions after anchor date`, recomputed on every mutation and import, stored in `accounts.balance_cents` plus daily snapshots so net worth and history follow. Anchors come from a Capital One `Balance` column or the user's **Set balance** action. Credit cards also count Transfer-category payments from other accounts whose text contains the card's `payment_match` phrase, de-duplicated against the card's own listed payments and skipped when ambiguous between cards. Schema version is 3 (migration adds `anchor_cents`, `anchor_date`, `payment_match`).
+- Known limits: manual transactions are not tied to accounts so they do not move balances; unanchored cards show an estimate; transfers between two CSV checking/savings accounts are not paired; pre-existing CSV card accounts created before schema v3 stay excluded from net worth until the user toggles them on.
+
 ## Deployment status — 2026-11-11
 
 Site-specific details (host addresses, container IDs, router and firewall settings, hostnames, the maintainer's tailnet) are deliberately not recorded in this public repository; they live in the maintainer's private homelab notes.

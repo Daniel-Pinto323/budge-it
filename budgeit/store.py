@@ -8,7 +8,7 @@ import re
 from datetime import date
 from typing import Any
 
-from . import db, keywords, security
+from . import db, keywords, ledger, security
 
 SPECIAL_CATEGORIES = ("Uncategorized", "Income", "Transfer")
 COLORS = ["#3d9770", "#5f86ad", "#d3735f", "#c59b48", "#8c77a3", "#608f99", "#4c94a5", "#d29272", "#438260", "#b17d89"]
@@ -115,7 +115,8 @@ def state(user_id: int) -> dict[str, Any]:
         "FROM connections WHERE user_id = ? ORDER BY created_at", (user_id,)
     ).fetchall()
     accounts = conn.execute(
-        "SELECT id, connection_id, name, kind, subtype, mask, currency, balance_cents, available_cents, balance_at, included "
+        "SELECT id, connection_id, name, kind, subtype, mask, currency, balance_cents, available_cents, balance_at, included, "
+        "anchor_cents, anchor_date, payment_match "
         "FROM accounts WHERE user_id = ? ORDER BY kind, name", (user_id,)
     ).fetchall()
     transactions = conn.execute(
@@ -214,6 +215,7 @@ def delete_category(user_id: int, category_id: str) -> None:
                      "WHERE user_id = ? AND category = ?", (user_id, current["name"]))
         conn.execute("DELETE FROM category_rules WHERE user_id = ? AND category = ?", (user_id, current["name"]))
         conn.execute("DELETE FROM keyword_rules WHERE user_id = ? AND category = ?", (user_id, current["name"]))
+        ledger.recompute(conn, user_id)
 
 
 # --- Transactions --------------------------------------------------------------
@@ -237,6 +239,7 @@ def add_manual_transaction(user_id: int, data: dict[str, Any]) -> None:
              int(bool(data.get("hidden"))), _text(data.get("account"), "Account", 60, required=False) or "Manual entry",
              stamp, stamp),
         )
+        ledger.recompute(conn, user_id)
 
 
 def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) -> None:
@@ -267,22 +270,42 @@ def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) 
         if "hidden" in data:
             conn.execute("UPDATE transactions SET hidden = ?, updated_at = ? WHERE id = ?",
                          (int(bool(data["hidden"])), db.now(), transaction_id))
+        ledger.recompute(conn, user_id)
 
 
 def delete_manual_transaction(user_id: int, transaction_id: str) -> None:
     with db.tx() as conn:
         deleted = conn.execute("DELETE FROM transactions WHERE id = ? AND user_id = ? AND manual = 1",
                                (transaction_id, user_id)).rowcount
+        if deleted:
+            ledger.recompute(conn, user_id)
     if not deleted:
         raise AppError("Only manual transactions can be deleted.", 404)
 
 
-def set_account_included(user_id: int, account_id: str, included: bool) -> None:
+def update_account(user_id: int, account_id: str, data: dict[str, Any]) -> None:
     with db.tx() as conn:
-        updated = conn.execute("UPDATE accounts SET included = ? WHERE id = ? AND user_id = ?",
-                               (int(bool(included)), account_id, user_id)).rowcount
-    if not updated:
-        raise AppError("Account not found.", 404)
+        account = conn.execute(
+            "SELECT a.id, a.kind, c.provider FROM accounts a JOIN connections c ON c.id = a.connection_id "
+            "WHERE a.id = ? AND a.user_id = ?", (account_id, user_id)).fetchone()
+        if not account:
+            raise AppError("Account not found.", 404)
+        if "included" in data:
+            conn.execute("UPDATE accounts SET included = ? WHERE id = ?", (int(bool(data["included"])), account_id))
+        if {"payment_match", "amount"} & data.keys() and account["provider"] != "csv":
+            raise AppError("Only CSV-imported accounts have a transaction-based balance.", 403)
+        if "payment_match" in data:
+            phrase = _text(data["payment_match"], "Payment match", 40, required=False).lower()
+            conn.execute("UPDATE accounts SET payment_match = ? WHERE id = ?", (phrase or None, account_id))
+        if "amount" in data:
+            cents = _cents(data["amount"], "Balance")
+            try:
+                as_of = date.fromisoformat(str(data.get("as_of") or db.today())).isoformat()
+            except ValueError as error:
+                raise AppError("Date must be YYYY-MM-DD.") from error
+            conn.execute("UPDATE accounts SET anchor_cents = ?, anchor_date = ? WHERE id = ?",
+                         (-cents if data.get("owed") else cents, as_of, account_id))
+        ledger.recompute(conn, user_id)
 
 
 # --- Manual net-worth accounts -------------------------------------------------
@@ -391,6 +414,7 @@ def _apply_keyword_rules(conn, user_id: int) -> int:
         if category in names and category != row["category"]:
             conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, row["id"]))
             changed += 1
+    ledger.recompute(conn, user_id)
     return changed
 
 

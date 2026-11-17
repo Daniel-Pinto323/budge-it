@@ -497,6 +497,47 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(state["net_worth_history"][-1]["total"], before)
         self.assertFalse(any(c["provider"] == "manual" for c in state["connections"]))
 
+    def test_39_csv_balances_follow_transactions_and_card_payments(self):
+        def account(state, name):
+            return next(a for a in state["accounts"] if a["name"] == name)
+
+        card_csv = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n11/05/2026,11/06/2026,Amazon.com,Shopping,Sale,-10.00,\n"
+        state = self.client.request("POST", "/api/import/csv", {"csv": card_csv, "account": "Chase 7777", "mask": "7777"})[1]["state"]
+        card = account(state, "Chase 7777")
+        self.assertEqual((card["balance_cents"], card["included"], card["payment_match"]), (-1000, True, "chase"))
+        # Anchor it to the real balance on a date: only later transactions move it.
+        state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"amount": 50000, "owed": True, "as_of": "2026-11-01"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)
+        before = state["net_worth_history"][-1]["total"]
+        old_card = account(state, "Chase 0986")
+        self.assertEqual(old_card["payment_match"], "chase")  # two cards now match "chase": payments are ambiguous
+        # A checking withdrawal that mentions the issuer pays the card down and lowers checking.
+        bank_csv = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
+                    "7777,Withdrawal from CHASE CREDIT CRD AUTOPAY,11/10/26,Debit,25,900.00\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": bank_csv, "account": "Test Checking", "mask": "7777"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)  # ambiguous, so not applied
+        self.assertEqual(account(state, "Test Checking")["balance_cents"], 90000)
+        state = self.client.request("PATCH", f"/api/accounts/{old_card['id']}", {"payment_match": ""})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
+        self.assertEqual(state["net_worth_history"][-1]["total"], before + 2500 + 90000)
+        # Payment matching is editable, and can be switched off.
+        state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"payment_match": ""})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)
+        state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"payment_match": "Chase"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
+        # The card's own export lists the same payment: it is counted once, not twice.
+        card_csv += "11/11/2026,11/11/2026,AUTOMATIC PAYMENT - THANK YOU,,Payment,25.00,\n"
+        state = self.client.request("POST", "/api/import/csv", {"csv": card_csv, "account": "Chase 7777"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
+        # Editing or removing a transaction moves the balance.
+        sale = next(t for t in state["transactions"] if t["merchant"] == "Amazon.com" and t["account"].startswith("Chase 7777"))
+        state = self.client.request("PATCH", f"/api/transactions/{sale['id']}",
+                                    {"merchant": "Amazon.com", "date": "2026-11-05", "amount": 3000, "kind": "expense"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -50500)
+        plaid = next(a for a in state["accounts"] if a["name"] == "Plaid Credit Card")
+        self.assertEqual(self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"amount": 1})[0], 403)
+        self.assertEqual(self.client.request("PATCH", f"/api/accounts/{plaid['id']}", {"included": True})[0], 200)
+
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()
         before = state["net_worth_history"][-1]["total"]
