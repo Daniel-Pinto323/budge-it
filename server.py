@@ -6,7 +6,7 @@
     python3 server.py create-user EMAIL   create a login (prompts for a password)
     python3 server.py set-password EMAIL  reset a password and sign out its sessions
 """
-# comment test
+
 from __future__ import annotations
 
 import getpass
