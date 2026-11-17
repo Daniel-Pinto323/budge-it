@@ -381,12 +381,13 @@ function renderAccounts() {
   $('#accountsList').innerHTML = connections.map(connection => {
     const accounts = state.accounts.filter(account => account.connection_id === connection.id);
     const demo = connection.provider === 'demo';
-    const [tone, label] = demo ? ['', 'Sample data'] : (STATUS[connection.status] || STATUS.error);
-    const source = demo ? 'synthetic' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
+    const csv = connection.provider === 'csv';
+    const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : (STATUS[connection.status] || STATUS.error);
+    const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
     const id = esc(connection.id);
     const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>`).join('')
       || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
-    const actions = demo ? '' : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
+    const actions = demo ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
     return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
   }).join('') || '<section class="institution-card"><p class="empty-note padded">Nothing connected yet. Use <strong>Connect institution</strong> above, or load sample data from Settings to explore first.</p></section>';
 }
@@ -565,6 +566,32 @@ $('#manualTransactionForm').addEventListener('submit', async event => {
 });
 
 // --- Accounts and connections -------------------------------------------------
+
+$('#importCsvButton').addEventListener('click', () => {
+  $('#importCsvForm').reset();
+  $('#importCsvDialog').showModal();
+});
+$('#importCsvFile').addEventListener('change', event => {
+  const file = event.target.files[0];
+  const guess = file && file.name.match(/^([A-Za-z]+)(\d{4})_/);
+  if (guess && !$('#importCsvAccount').value) {
+    $('#importCsvAccount').value = `${guess[1]} ${guess[2]}`;
+    $('#importCsvForm').elements.mask.value = guess[2];
+  }
+});
+$('#importCsvForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const file = form.elements.file.files[0];
+  if (!file) return;
+  if (file.size > 1_500_000) { toast('That file is too large to import.'); return; }
+  const csv = await file.text();
+  const data = await act(() => api('POST', '/api/import/csv', {csv, account: form.elements.account.value.trim(), mask: form.elements.mask.value.trim()}));
+  if (data) {
+    $('#importCsvDialog').close();
+    toast(`Imported ${data.import.added} transaction${data.import.added === 1 ? '' : 's'}${data.import.skipped ? ` (${data.import.skipped} already imported)` : ''}`);
+  }
+});
 
 $('#accountsList').addEventListener('change', event => {
   const id = event.target.dataset.account;

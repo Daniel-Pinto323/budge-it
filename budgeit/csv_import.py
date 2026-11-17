@@ -1,0 +1,137 @@
+"""Manual import of card-activity CSV exports (Chase format) while a live provider is unavailable.
+
+Each imported card becomes a connection with provider = 'csv'. Rows get a stable ID derived from
+their contents, so re-importing an overlapping file never double-counts, and categories the user
+already changed are left alone.
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import re
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from . import db
+from .store import AppError, category_names
+
+MAX_ROWS = 5000
+# Chase category -> this app's default categories. Unmapped ones stay Uncategorized.
+CATEGORY_HINTS = {
+    "food & drink": "Dining", "shopping": "Shopping", "groceries": "Groceries", "bills & utilities": "Utilities",
+    "gas": "Transportation", "automotive": "Transportation", "travel": "Travel", "entertainment": "Fun money",
+    "gifts & donations": "Gifts", "personal": "Fun money",
+}
+_REQUIRED = ("transaction date", "description", "amount")
+
+
+def _date(value: str) -> str:
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+        try:
+            return datetime.strptime(value.strip(), fmt).date().isoformat()
+        except ValueError:
+            continue
+    raise AppError(f"Unrecognised date “{value}”. Expected MM/DD/YYYY.")
+
+
+def _cents(value: str) -> int:
+    text = value.strip().replace("$", "").replace(",", "")
+    negative = text.startswith("(") and text.endswith(")")
+    try:
+        number = Decimal(text.strip("()"))
+    except InvalidOperation as error:
+        raise AppError(f"Unrecognised amount “{value}”.") from error
+    cents = int(number * 100)
+    return -cents if negative else cents
+
+
+def parse(text: str) -> list[dict[str, Any]]:
+    """Parse a Chase activity CSV into rows using the app's sign convention (positive = money out)."""
+    reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
+    fields = {(name or "").strip().lower(): name for name in (reader.fieldnames or [])}
+    if any(column not in fields for column in _REQUIRED):
+        raise AppError("This doesn’t look like a card activity export. Expected columns: "
+                       "Transaction Date, Description, Category, Type, Amount.")
+    rows: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for line in reader:
+        get = lambda key: (line.get(fields.get(key, "")) or "").strip()  # noqa: E731
+        if not get("transaction date") and not get("amount"):
+            continue
+        if len(rows) >= MAX_ROWS:
+            raise AppError(f"Files are limited to {MAX_ROWS} transactions.")
+        day, post = _date(get("transaction date")), get("post date")
+        description = get("description")[:120] or "Unknown"
+        # Chase shows card spending as negative; the app stores spending as positive.
+        amount = -_cents(get("amount"))
+        kind = get("type").lower()
+        digest = "|".join((day, post, description, str(amount), get("memo")))
+        seen[digest] = seen.get(digest, 0) + 1
+        rows.append({
+            "provider_txn_id": hashlib.sha256(f"{digest}#{seen[digest]}".encode()).hexdigest()[:32],
+            "date": day, "merchant": description, "amount_cents": amount,
+            "provider_category": get("category") or None,
+            "transfer": kind == "payment",
+        })
+    if not rows:
+        raise AppError("No transactions found in that file.")
+    return rows
+
+
+def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
+    text = data.get("csv")
+    if not isinstance(text, str) or not text.strip():
+        raise AppError("Choose a CSV file to import.")
+    name = re.sub(r"\s+", " ", str(data.get("account") or "")).strip()[:60]
+    if not name:
+        raise AppError("Account name is required.")
+    mask = re.sub(r"\D", "", str(data.get("mask") or ""))[:4] or None
+    rows = parse(text)
+    stamp = db.now()
+    added = 0
+    with db.tx() as conn:
+        names = category_names(conn, user_id)
+        rules = {row["match"]: row["category"] for row in conn.execute(
+            "SELECT match, category FROM category_rules WHERE user_id = ?", (user_id,))}
+        item_id = f"csv-{user_id}-{name.lower()}"
+        connection = conn.execute("SELECT id FROM connections WHERE provider = 'csv' AND provider_item_id = ?",
+                                  (item_id,)).fetchone()
+        if connection:
+            connection_id = connection["id"]
+            conn.execute("UPDATE connections SET last_attempt_at = ?, last_success_at = ? WHERE id = ?",
+                         (stamp, stamp, connection_id))
+        else:
+            connection_id = db.new_id()
+            conn.execute(
+                "INSERT INTO connections (id, user_id, provider, provider_item_id, institution, last_attempt_at, "
+                "last_success_at, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (connection_id, user_id, "csv", item_id, name, stamp, stamp, stamp))
+        account = conn.execute("SELECT id FROM accounts WHERE connection_id = ?", (connection_id,)).fetchone()
+        if account:
+            account_id = account["id"]
+        else:
+            account_id = db.new_id()
+            # No balance in the export, so keep it out of net worth until the user decides otherwise.
+            conn.execute(
+                "INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, mask, "
+                "balance_cents, included) VALUES (?,?,?,?,?,?,?,?,0,0)",
+                (account_id, user_id, connection_id, "csv", name, "credit", "credit card", mask))
+        for row in rows:
+            rule = rules.get(row["merchant"].lower())
+            hint = CATEGORY_HINTS.get((row["provider_category"] or "").lower())
+            if rule in names:
+                category, source = rule, "rule"
+            elif row["transfer"] and "Transfer" in names:
+                category, source = "Transfer", "provider"
+            else:
+                category, source = (hint if hint in names else "Uncategorized"), "provider"
+            added += conn.execute(
+                "INSERT INTO transactions (id, user_id, account_id, provider_txn_id, date, merchant, amount_cents, currency, "
+                "pending, category, category_source, provider_category, hidden, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?) ON CONFLICT (account_id, provider_txn_id) DO NOTHING",
+                (db.new_id(), user_id, account_id, row["provider_txn_id"], row["date"], row["merchant"], row["amount_cents"],
+                 category, source, row["provider_category"], stamp, stamp)).rowcount
+    return {"added": added, "skipped": len(rows) - added}

@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from . import db, demo, security, store
+from . import csv_import, db, demo, security, store
 from .config import STATIC_DIR, Config
 from .providers.base import ProviderError
 from .store import AppError
@@ -121,8 +121,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise AppError("Request is too large.", 413)
         return self.rfile.read(size) if size else b""
 
-    def read_json(self) -> dict[str, Any]:
-        body = self.read_body()
+    def read_json(self, limit: int = 64_000) -> dict[str, Any]:
+        body = self.read_body(limit)
         try:
             payload = json.loads(body) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -233,7 +233,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True}, extra={"Set-Cookie": self.session_cookie("", 0)})
             return
 
-        data = self.read_json() if method != "GET" else {}
+        data = self.read_json(2_000_000 if path == "/api/import/csv" else 64_000) if method != "GET" else {}
         for route_method, pattern, handler in self.routes():
             match = re.fullmatch(pattern, path)
             if match and route_method == method:
@@ -261,6 +261,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             ("POST", "/api/sync", lambda u, d: self.limited_sync(u, lambda: sync.sync_user(u, refresh=True))),
             ("POST", f"/api/connections/{ID}/sync", self.sync_one),
             ("DELETE", f"/api/connections/{ID}", lambda u, d, i: sync.disconnect(u, i)),
+            ("POST", "/api/import/csv", lambda u, d: {"import": csv_import.import_csv(u, d)}),
             ("POST", "/api/demo", lambda u, d: demo.load(u)),
             ("DELETE", "/api/demo", lambda u, d: demo.remove(u)),
             ("POST", "/api/data/delete", self.delete_data),

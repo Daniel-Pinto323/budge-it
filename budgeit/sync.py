@@ -137,20 +137,20 @@ class SyncService:
 
     def sync_user(self, user_id: int, refresh: bool = False) -> None:
         rows = db.connect().execute(
-            "SELECT id FROM connections WHERE user_id = ? AND provider != 'demo'", (user_id,)
+            "SELECT id FROM connections WHERE user_id = ? AND provider NOT IN ('demo', 'csv')", (user_id,)
         ).fetchall()
         for row in rows:
             self.sync_connection(row["id"], refresh=refresh)
 
     def sync_all(self) -> None:
-        for row in db.connect().execute("SELECT id FROM connections WHERE provider != 'demo'").fetchall():
+        for row in db.connect().execute("SELECT id FROM connections WHERE provider NOT IN ('demo', 'csv')").fetchall():
             self.sync_connection(row["id"])
 
     def sync_connection(self, connection_id: str, refresh: bool = False) -> None:
         """Import the latest data for one connection. Failures are recorded on the connection, not raised."""
         with self._lock(connection_id):
             connection = db.connect().execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
-            if not connection or connection["provider"] == "demo":
+            if not connection or connection["provider"] in ("demo", "csv"):
                 return
             with db.tx() as conn:
                 conn.execute("UPDATE connections SET last_attempt_at = ? WHERE id = ?", (db.now(), connection_id))

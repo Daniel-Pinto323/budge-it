@@ -168,6 +168,24 @@ class MockHandler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_DELETE = _handle
 
 
+CHASE_CSV = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n" + "\n".join([
+    "11/09/2026,11/10/2026,UBER EATS,Food & Drink,Sale,-11.09,",
+    "11/09/2026,11/10/2026,AMAZON MKTPLACE PMTS,Shopping,Return,9.93,",
+    "11/01/2026,11/01/2026,Store 0,Shopping,Sale,-1.50,",
+    "11/02/2026,11/02/2026,Store 1,Shopping,Sale,-2.50,",
+    "11/03/2026,11/03/2026,Store 2,Shopping,Sale,-3.50,",
+    "11/04/2026,11/04/2026,Store 3,Shopping,Sale,-4.50,",
+    "11/05/2026,11/05/2026,Store 4,Shopping,Sale,-5.50,",
+    "11/06/2026,11/06/2026,Store 5,Shopping,Sale,-6.50,",
+    "11/07/2026,11/07/2026,Store 6,Shopping,Sale,-7.50,",
+    "11/08/2026,11/08/2026,Store 7,Shopping,Sale,-8.50,",
+    "11/09/2026,11/09/2026,Store 8,Shopping,Sale,-9.50,",
+    "11/01/2026,11/01/2026,Store 9,Shopping,Sale,-10.50,",
+    "11/02/2026,11/02/2026,Store 10,Shopping,Sale,-11.50,",
+    "11/03/2026,11/03/2026,Store 11,Shopping,Sale,-12.50,",
+])
+
+
 class Client:
     def __init__(self, base: str) -> None:
         self.base, self.cookie, self.csrf = base, "", ""
@@ -384,6 +402,23 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("attachment", headers["Content-Disposition"])
         self.assertIn("'=HYPERLINK(evil)", body.decode("utf-8-sig"))
+
+    def test_35_csv_import_is_idempotent_and_signed_correctly(self):
+        body = {"csv": CHASE_CSV, "account": "Chase 0986", "mask": "0986"}
+        status, payload, _ = self.client.request("POST", "/api/import/csv", body)
+        self.assertEqual((status, payload["import"]), (200, {"added": 14, "skipped": 0}))
+        rows = [t for t in payload["state"]["transactions"] if t["account"] == "Chase 0986 ••0986"]
+        self.assertEqual(len(rows), 14)
+        sale = next(t for t in rows if t["merchant"] == "UBER EATS" and t["date"] == "2026-11-09")
+        refund = next(t for t in rows if t["merchant"] == "AMAZON MKTPLACE PMTS" and t["date"] == "2026-11-09")
+        self.assertEqual((sale["amount"], sale["category"]), (1109, "Dining"))
+        self.assertEqual(refund["amount"], -993)
+        again = self.client.request("POST", "/api/import/csv", body)[1]
+        self.assertEqual(again["import"], {"added": 0, "skipped": 14})
+        self.assertEqual(self.client.request("POST", "/api/import/csv", {**body, "csv": "a,b\n1,2"})[0], 400)
+        self.client.request("POST", "/api/sync", {})  # must not try to sync csv connections
+        csv_conn = next(c for c in self.state()["connections"] if c["provider"] == "csv")
+        self.assertEqual(csv_conn["status"], "healthy")
 
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()
