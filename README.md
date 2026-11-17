@@ -44,6 +44,13 @@ You can fill it three ways: **import CSV statements**, **add accounts by hand**,
   currently comes from CSV imports and manual accounts.
 - The experimental MX integration was removed; Plaid is the only provider.
 
+**Possible next steps**:
+
+- Move from Tailscale to a Cloudflare Tunnel with Cloudflare Access for easier access
+  from any browser, Plaid webhooks, and a standard redirect URI for Plaid.
+- A proper login and sign-up experience (invite sign-up, password reset, a nicer login
+  page, two-factor sign-in, and an admin screen) before inviting any other users.
+
 ## Quick start
 
 Requires Python 3.10+ and the `cryptography` package.

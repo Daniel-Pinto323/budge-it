@@ -206,6 +206,33 @@ Site-specific details (host addresses, container IDs, router and firewall settin
 - Discrepancy to resolve: the implementation-status section above describes the earlier static prototype, but the repo now contains a Python server (`server.py`, `budgeit/`, SQLite), `deploy/budgeit.service`, and `deploy/Caddyfile`, documented in `README.md`. Re-verify the codebase and update this file accordingly.
 - Keep live bank data out of the deployment until backups and the access path are in place.
 
+## Future work and things to consider
+
+Not started. Recorded so the reasoning is not lost; move an item to the implementation status when it ships and update `README.md`.
+
+### Switch from Tailscale to a Cloudflare Tunnel (easier access)
+
+Today the app is private through Tailscale (`tailscale serve`), which means every device must have Tailscale connected. A Cloudflare Tunnel (`cloudflared`, outbound-only) would give a normal HTTPS hostname that works from any browser.
+
+- **Why:** reach it without a VPN client (phone, shared or work computers, family); Plaid **webhooks** could finally arrive, so syncs would be near-immediate instead of every 6 hours; a real domain avoids the unverified question of whether Plaid accepts a `*.ts.net` OAuth redirect URI (the likely blocker for linking banks from a phone). `cloudflared` also needs no `/dev/net/tun` passthrough in the unprivileged LXC.
+- **Needed:** a domain on Cloudflare; a tunnel to `http://127.0.0.1:8080`; **Cloudflare Access (Zero Trust)** with an allow-list of emails in front of the whole hostname, because a tunnel alone leaves the app's login page open to the internet; a **bypass rule for `/api/webhooks/plaid` only** (the app verifies Plaid's signature itself). In `.env`: `PUBLIC_URL=https://<hostname>`, `TRUST_PROXY=1`, `HOST=127.0.0.1`.
+- **Trade-offs to weigh first:** Cloudflare terminates TLS and can see the plaintext of financial traffic; the hostname is public (visible in certificate logs); the Cloudflare account becomes a key to the door; users log in twice (Access, then the app) and Access sessions expire, which can be awkward in a Home Screen web app. The app accepts one origin only (`PUBLIC_URL`), so the Tailscale and Cloudflare addresses cannot both be used in the browser; Tailscale could stay for SSH and admin.
+- **To verify when doing it:** login rate limiting sees real client addresses behind Cloudflare (`TRUST_PROXY` reads `X-Forwarded-For`); Plaid Link and OAuth redirects work through Access; webhook delivery.
+- **Deliverables:** a `deploy/` guide (or helper) and a README section; keep the Tailscale instructions as the private-only option.
+- **Decision rule:** stay on Tailscale unless Plaid production access needs a redirect URI or webhooks that Tailscale cannot provide, or other people need to use the app (see below).
+
+### A proper login and sign-up experience
+
+Accounts are created by the admin with `python3 server.py create-user`, there is no self-service, and the login page is a bare form. Needed before opening the app to friends or family:
+
+- **Sign-up** by invite (an admin-generated link or code), not open registration; the first user stays the admin.
+- **Password reset and change** from the UI (today only `set_password` via the CLI), plus session management (list and revoke sessions).
+- **A real login page:** clearer errors, show/hide password, a "remember this device" choice, lockout messaging, and a first-run setup screen instead of the CLI.
+- **Two-factor sign-in** (TOTP at minimum). Until it exists, Cloudflare Access's email code acts as a second factor if the tunnel is adopted.
+- **Admin screen:** list users, disable or delete a user and their data, and see last sign-in.
+- **Also consider before inviting others:** the maintainer can read every user's data (only Plaid tokens are encrypted), so say so plainly; Plaid's Trial plan allows about 10 linked institutions in total across all users, and Plaid's production review asks about privacy policy, consent and data deletion when handling other people's data; per-user data isolation is application-level (covered by tests) and shares one SQLite file; backups hold everyone's data.
+- **Choosing the access path for others:** Cloudflare Tunnel with Access (one-time email code, nothing to install) suits non-technical family; Tailscale node sharing (the budgeit machine only, never the whole tailnet) suits one or two technical friends.
+
 ## Future hardening (nice to have) — enhanced data encryption
 
 Current state, from `budgeit/security.py` and `db.py`: only the Plaid access tokens are encrypted at rest (Fernet, keyed by `BUDGEIT_ENCRYPTION_KEY`). Passwords are scrypt hashes, session tokens are stored as SHA-256 hashes, and traffic is HTTPS over Tailscale. Transactions, balances, account names and categories are plain SQLite rows protected only by file permissions (`0600` file in a `0700` directory), the container boundary and Tailscale-only access. Anyone who obtains the disk, a container backup or a database copy can read them. Not urgent for a private, tailnet-only instance, but worth doing later, roughly in this order:
