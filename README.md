@@ -13,8 +13,8 @@ You can fill it three ways: **import CSV statements**, **add accounts by hand**,
 - **Budgets.** Monthly limits per category, with status that turns amber ("Almost
   there") and red ("Budget hit", "Budget passed!"). Click a category to preview its
   latest transactions for the month, or click an Overview tile to jump to it.
-- **Activity.** Search and filter every transaction, edit them, add notes (a bank memo
-  carries over), and hide any from your budget with the eye. Transfers such as card
+- **Activity.** Search and filter every transaction, edit them, add notes,
+  and toggle to hide or include any from your budget. Transfers such as card
   payments are hidden from budgets by default.
 - **Auto-categorization.** Merchants are filed by an editable keyword list (Settings),
   your own "Always" rules, and the bank's category, in that order. Categories you set
@@ -24,6 +24,16 @@ You can fill it three ways: **import CSV statements**, **add accounts by hand**,
 - **Net worth.** Balances from linked accounts, CSV imports and manual accounts
   (401(k), home, loans) roll up into one history.
 - **Your data stays yours.** Export everything as CSV, or delete it all from Settings.
+
+## Project layout
+
+- `server.py`: entry point and admin commands (`generate-key`, `create-user`)
+- `budgeit/`: server code (config, SQLite storage and migrations, auth, sync, CSV import,
+  balances, Plaid adapter, HTTP API)
+- `static/`: the browser app
+- `deploy/`: systemd units, Caddy config, and the auto-update script and timer
+- `tests/`: end-to-end tests against a fake Plaid server
+- `agent.md`: the project plan and detailed implementation status
 
 ## Status
 
@@ -94,7 +104,7 @@ This repository is deployed on a home server as follows:
 - **Access.** Private, through **Tailscale**. The app listens on `127.0.0.1:8080` and
   `tailscale serve` publishes it over HTTPS to the maintainer's own devices. Nothing is
   exposed to the internet, which also means Plaid webhooks cannot reach it, so data
-  refreshes on the timer. Getting Tailscale working inside an unprivileged LXC took
+  refreshes on a timer. Getting Tailscale working inside an unprivileged LXC took
   three steps: pass `/dev/net/tun` through to the container in Proxmox, run
   `tailscale up`, then enable MagicDNS and HTTPS certificates in the Tailscale admin
   console and run `tailscale serve --bg 8080`. `.env` then has `HOST=127.0.0.1`,
@@ -211,13 +221,3 @@ copy a backup over `budgeit.sqlite3`.
 - **Settings → Delete all my data** revokes every Plaid connection and wipes your records.
 - Not implemented yet: encrypted backups, an encrypted data volume or SQLCipher,
   encryption key rotation, and two-factor sign-in. `agent.md` discusses the trade-offs.
-
-## Project layout
-
-- `server.py`: entry point and admin commands (`generate-key`, `create-user`)
-- `budgeit/`: server code (config, SQLite storage and migrations, auth, sync, CSV import,
-  balances, Plaid adapter, HTTP API)
-- `static/`: the browser app
-- `deploy/`: systemd units, Caddy config, and the auto-update script and timer
-- `tests/`: end-to-end tests against a fake Plaid server
-- `agent.md`: the project plan and detailed implementation status
