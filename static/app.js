@@ -302,7 +302,7 @@ function attentionItems(summary, items) {
     else if (connection.status === 'error') list.push(['amber', '!', `${connection.institution} could not sync`, connection.error || 'Try syncing again later.', 'accounts']);
   }
   const uncategorized = state.transactions.filter(t => t.category === 'Uncategorized' && !t.hidden && t.date.startsWith(month)).length;
-  if (uncategorized) list.push(['blue', '?', `${uncategorized} uncategorized transaction${uncategorized === 1 ? '' : 's'}`, 'Give them a category so your budget is accurate.', 'transactions']);
+  if (uncategorized) list.push(['blue', '?', `${uncategorized} uncategorized transaction${uncategorized === 1 ? '' : 's'}`, 'Give them a category so your budget is accurate.', 'budget', 'uncategorizedSection']);
   for (const item of items.filter(entry => entry.status === 'over').slice(0, 3)) {
     list.push(['coral', '↑', `${item.name} is ${money(item.spent - item.budget)} over`, `${money(item.spent)} spent of ${money(item.budget)}.`, 'budget']);
   }
@@ -329,7 +329,7 @@ function renderOverview() {
     || '<p class="empty-note">No transactions yet. Connect an institution or add one manually.</p>';
 
   const attention = attentionItems(summary, items);
-  $('#attentionList').innerHTML = attention.map(([tone, icon, title, text, view]) => `<div class="attention-item"><div class="attention-icon ${tone}">${icon}</div><div><strong>${esc(title)}</strong><p>${esc(text)}</p></div><button type="button" data-go="${view}" aria-label="Open ${view}">→</button></div>`).join('')
+  $('#attentionList').innerHTML = attention.map(([tone, icon, title, text, view, anchor]) => `<div class="attention-item"><div class="attention-icon ${tone}">${icon}</div><div><strong>${esc(title)}</strong><p>${esc(text)}</p></div><button type="button" data-go="${view}"${anchor ? ` data-scroll="${anchor}"` : ''} aria-label="Open ${view}">→</button></div>`).join('')
     || '<p class="empty-note">Nothing needs your attention.</p>';
 
   $('#netWorthHero').textContent = money(netWorth().total);
@@ -346,6 +346,16 @@ function categoryPreview(item) {
   return `<div class="category-preview"><p class="preview-title">Latest in ${esc(item.name)} · ${monthLabel(month)}</p>${latest.map(transactionRow).join('') || '<p class="empty-note">No transactions in this category this month.</p>'}<button class="text-button" type="button" data-view-category="${esc(item.name)}">${all.length > latest.length ? `View all ${all.length}` : 'Open in Activity'} <span>→</span></button></div>`;
 }
 
+function uncategorizedSection(summary) {
+  const all = state.transactions.filter(t => t.category === 'Uncategorized' && !t.hidden && t.date.startsWith(month));
+  const latest = all.slice(0, 5);
+  const heading = `<div class="group-title"><h2>Uncategorized</h2><span>${all.length ? (summary.uncategorized > 0 ? `${money(summary.uncategorized)} counted in “Spent so far”` : 'Needs a category') : 'All sorted'}</span></div>`;
+  const body = all.length
+    ? `<div class="category-preview"><p class="preview-title">${all.length > latest.length ? `Latest ${latest.length} of ${all.length}` : `${all.length} to review`} · ${monthLabel(month)}</p>${latest.map(transactionRow).join('')}<button class="text-button" type="button" data-view-category="Uncategorized">Review all in Activity <span>→</span></button></div>`
+    : '<div class="category-preview"><p class="empty-note">No uncategorized transactions at the moment.</p></div>';
+  return `<section class="budget-group" id="uncategorizedSection">${heading}${body}</section>`;
+}
+
 function renderBudgets() {
   const summary = monthSummary(month);
   const items = categoryItems(summary);
@@ -356,10 +366,8 @@ function renderBudgets() {
     const budget = members.reduce((total, item) => total + item.budget, 0);
     return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : 'No activity'}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
   }).join('');
-  if (summary.uncategorized > 0) {
-    markup += `<section class="budget-group"><div class="group-title"><h2>Uncategorized</h2><span>${money(summary.uncategorized)} counted in “Spent so far”</span></div><div class="budget-row loose-row"><div class="budget-name"><i class="category-bullet" style="background:#b6beb8"></i>Purchases without a category</div><button class="text-button" type="button" data-go="transactions">Review <span>→</span></button></div></section>`;
-  }
-  $('#budgetGroups').innerHTML = markup || '<p class="empty-note">No categories yet. Add one to start your plan.</p>';
+  markup += uncategorizedSection(summary);
+  $('#budgetGroups').innerHTML = (state.categories.length ? '' : '<p class="empty-note">No categories yet. Add one to start your plan.</p>') + markup;
   const remaining = summary.budget - summary.spent;
   $('#budgetTotal').textContent = money(summary.budget);
   $('#budgetSpent').textContent = money(summary.spent);
@@ -570,7 +578,17 @@ document.addEventListener('click', event => {
     return;
   }
   const nav = target.closest('[data-view],[data-go]');
-  if (nav) { go(nav.dataset.view || nav.dataset.go); return; }
+  if (nav) {
+    go(nav.dataset.view || nav.dataset.go);
+    const anchor = nav.dataset.scroll && document.getElementById(nav.dataset.scroll);
+    if (anchor) {
+      anchor.scrollIntoView({block: 'start'});
+      anchor.classList.remove('flash');
+      void anchor.offsetWidth;  // restart the highlight animation
+      anchor.classList.add('flash');
+    }
+    return;
+  }
   const brand = target.closest('a.brand');
   if (brand) { event.preventDefault(); go('overview'); return; }
   const close = target.closest('[data-close]');

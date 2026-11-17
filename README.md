@@ -74,6 +74,11 @@ an `https://` `PUBLIC_URL`.
   instead of implying anything synced.
 - **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid or MX;
   CSV imports, manual accounts and sample data have nothing to sync.
+- **Uncategorized on the Budget page.** The bottom of the Budget page always shows an
+  **Uncategorized** section with the latest five uncategorized transactions for the month
+  (click one to categorize it) and a link to review them all in Activity. When there are
+  none it says so. Overview's "uncategorized transactions" attention item jumps straight
+  there and briefly highlights the section.
 - **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens
   that category on the Budget page. Clicking any budget row there expands the latest
   five transactions in that category for the month shown, with a link to see them all

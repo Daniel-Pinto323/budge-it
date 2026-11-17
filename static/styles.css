@@ -45,3 +45,6 @@ textarea{font:inherit;border:1px solid var(--line);border-radius:9px;padding:9px
 /* Keep money on one line: a break after the "-" in "-$2,000.00" otherwise strands the sign above the number. */
 td.amount,.amount-col,.transaction-amount,.account-balance,.budget-numbers strong,.worth-row strong,.manual-actions strong{white-space:nowrap}
 td.amount{min-width:112px}
+
+#uncategorizedSection{scroll-margin-top:16px}#uncategorizedSection .empty-note{margin:8px 0}
+@keyframes flash{0%{box-shadow:0 0 0 3px #d9a13b99}100%{box-shadow:0 0 0 3px #d9a13b00}}.budget-group.flash{animation:flash 1.6s ease-out}
