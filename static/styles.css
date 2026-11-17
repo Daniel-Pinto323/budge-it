@@ -24,3 +24,5 @@
 .keyword-chip{display:inline-flex;align-items:center;gap:4px;margin:0 6px 6px 0;padding:3px 4px 3px 10px;border:1px solid #dfe4df;border-radius:999px;font-size:12px;background:#f7f9f7}
 .keyword-chip button{border:0;background:none;cursor:pointer;color:var(--muted);font-size:14px;line-height:1;padding:0 4px}.keyword-chip small{color:var(--muted)}
 .keyword-actions{margin-top:12px}
+
+.manual-accounts{margin-top:18px}.manual-accounts .panel-head p{max-width:560px;line-height:1.5}.manual-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0;border-top:1px solid #eef0ed;font-size:13px}.manual-row:first-child{margin-top:14px}.manual-row .worth-name small{font-weight:400}.manual-actions{display:flex;align-items:center;gap:10px}.manual-actions button{border:0;background:none;color:var(--muted);font-size:15px;padding:2px 4px}.manual-actions button:hover{color:var(--green)}

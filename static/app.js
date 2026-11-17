@@ -214,7 +214,7 @@ function netWorth() {
   const sum = list => list.reduce((total, account) => total + account.balance_cents, 0);
   return {assets, debts, assetTotal: sum(assets), debtTotal: sum(debts), total: sum(included)};
 }
-const realConnections = () => state.connections.filter(connection => connection.provider !== 'demo');
+const realConnections = () => state.connections.filter(connection => !['demo', 'manual'].includes(connection.provider));
 
 // --- Rendering ----------------------------------------------------------------
 
@@ -382,12 +382,13 @@ function renderAccounts() {
     const accounts = state.accounts.filter(account => account.connection_id === connection.id);
     const demo = connection.provider === 'demo';
     const csv = connection.provider === 'csv';
-    const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : (STATUS[connection.status] || STATUS.error);
-    const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
+    const manual = connection.provider === 'manual';
+    const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : manual ? ['', 'Manual'] : (STATUS[connection.status] || STATUS.error);
+    const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
     const id = esc(connection.id);
     const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>`).join('')
       || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
-    const actions = demo ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
+    const actions = demo || manual ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
     return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
   }).join('') || '<section class="institution-card"><p class="empty-note padded">Nothing connected yet. Use <strong>Connect institution</strong> above, or load sample data from Settings to explore first.</p></section>';
 }
@@ -403,6 +404,10 @@ function renderWorth() {
   const institutions = new Map(state.connections.map(connection => [connection.id, connection.institution]));
   const rows = (accounts, debt) => accounts.map(account => `<div class="worth-row"><div class="worth-name"><i style="background:${debt ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(institutions.get(account.connection_id) || '')} · ${esc(account.subtype || account.kind)}</small></div></div><strong>${debt ? '−' : ''}${money(Math.abs(account.balance_cents))}</strong></div>`).join('')
     || '<p class="empty-note">None included.</p>';
+  const manualIds = new Set(state.connections.filter(connection => connection.provider === 'manual').map(connection => connection.id));
+  const manualAccounts = state.accounts.filter(account => manualIds.has(account.connection_id));
+  $('#manualAccountsList').innerHTML = manualAccounts.map(account => `<div class="manual-row"><div class="worth-name"><i style="background:${account.balance_cents < 0 ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(account.subtype || (account.balance_cents < 0 ? 'Liability' : 'Asset'))} · updated ${ago(account.balance_at)}${account.included ? '' : ' · excluded'}</small></div></div><div class="manual-actions"><strong>${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}</strong><button type="button" data-edit-manual="${esc(account.id)}" aria-label="Edit ${esc(account.name)}">✎</button><button type="button" data-delete-manual="${esc(account.id)}" aria-label="Delete ${esc(account.name)}">×</button></div></div>`).join('')
+    || '<p class="empty-note">No manual accounts yet.</p>';
   $('#assetsList').innerHTML = rows(worth.assets, false);
   $('#debtsList').innerHTML = rows(worth.debts, true);
 }
@@ -818,4 +823,41 @@ $('#applyKeywords').addEventListener('click', async () => {
 });
 $('#resetKeywords').addEventListener('click', () => {
   if (window.confirm('Restore the built-in keyword list? Keywords you added or moved will be removed.')) act(() => api('POST', '/api/keyword-rules/reset'), 'Keyword rules reset to defaults');
+});
+
+// --- Manual net-worth accounts -------------------------------------------------
+
+$('#addManualAccount').addEventListener('click', () => {
+  const form = $('#manualAccountForm');
+  form.reset();
+  delete form.dataset.id;
+  $('#manualAccountTitle').textContent = 'Add an account';
+  $('#manualAccountDialog').showModal();
+});
+$('#manualAccountsList').addEventListener('click', event => {
+  const editId = event.target.dataset.editManual;
+  const deleteId = event.target.dataset.deleteManual;
+  const account = state.accounts.find(item => item.id === (editId || deleteId));
+  if (!account) return;
+  if (editId) {
+    const form = $('#manualAccountForm');
+    form.dataset.id = editId;
+    form.elements.name.value = account.name;
+    form.elements.subtype.value = account.subtype || '';
+    form.elements.liability.value = account.balance_cents < 0 ? '1' : '';
+    form.elements.amount.value = (Math.abs(account.balance_cents) / 100).toFixed(2);
+    $('#manualAccountTitle').textContent = 'Edit account';
+    $('#manualAccountDialog').showModal();
+  } else if (window.confirm(`Delete ${account.name} and its history?`)) {
+    act(() => api('DELETE', `/api/manual-accounts/${deleteId}`), `${account.name} deleted`);
+  }
+});
+$('#manualAccountForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = {name: form.elements.name.value.trim(), subtype: form.elements.subtype.value.trim(),
+    liability: form.elements.liability.value === '1', amount: toCents(form.elements.amount.value)};
+  const id = form.dataset.id;
+  const ok = await act(() => id ? api('PATCH', `/api/manual-accounts/${id}`, body) : api('POST', '/api/manual-accounts', body), id ? 'Account updated' : 'Account added');
+  if (ok) $('#manualAccountDialog').close();
 });

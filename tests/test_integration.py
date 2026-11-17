@@ -477,6 +477,26 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(self.client.request("POST", "/api/keyword-rules/reset", {})[0], 200)
         self.assertTrue(any(r["keyword"] == "divvy" for r in self.state()["keyword_rules"]))
 
+    def test_38_manual_net_worth_accounts(self):
+        before = self.state()["net_worth_history"][-1]["total"]
+        self.assertEqual(self.client.request("POST", "/api/manual-accounts", {"name": "401(k)", "subtype": "Retirement", "amount": 1000000})[0], 200)
+        state = self.client.request("POST", "/api/manual-accounts", {"name": "Car loan", "liability": True, "amount": 250000})[1]["state"]
+        self.assertEqual(state["net_worth_history"][-1]["total"], before + 750000)
+        k401 = next(a for a in state["accounts"] if a["name"] == "401(k)")
+        loan = next(a for a in state["accounts"] if a["name"] == "Car loan")
+        self.assertEqual((k401["balance_cents"], loan["balance_cents"]), (1000000, -250000))
+        state = self.client.request("PATCH", f"/api/manual-accounts/{k401['id']}", {"name": "401(k)", "amount": 1100000})[1]["state"]
+        self.assertEqual(state["net_worth_history"][-1]["total"], before + 850000)
+        self.assertEqual(self.client.request("POST", "/api/manual-accounts", {"name": "x", "amount": -5})[0], 400)
+        plaid = next(a for a in state["accounts"] if a["name"] == "Plaid Credit Card")
+        self.assertEqual(self.client.request("DELETE", f"/api/manual-accounts/{plaid['id']}", {})[0], 404)
+        self.client.request("POST", "/api/sync", {})  # manual connections are never synced
+        for account in (k401, loan):
+            self.assertEqual(self.client.request("DELETE", f"/api/manual-accounts/{account['id']}", {})[0], 200)
+        state = self.state()
+        self.assertEqual(state["net_worth_history"][-1]["total"], before)
+        self.assertFalse(any(c["provider"] == "manual" for c in state["connections"]))
+
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()
         before = state["net_worth_history"][-1]["total"]

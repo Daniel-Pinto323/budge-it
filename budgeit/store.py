@@ -285,6 +285,71 @@ def set_account_included(user_id: int, account_id: str, included: bool) -> None:
         raise AppError("Account not found.", 404)
 
 
+# --- Manual net-worth accounts -------------------------------------------------
+
+MAX_MANUAL_ACCOUNTS = 100
+
+
+def _manual_fields(data: dict[str, Any]) -> tuple[str, str | None, int]:
+    name = _text(data.get("name"), "Account name", 60)
+    label = _text(data.get("subtype"), "Type", 30, required=False) or None
+    cents = _cents(data.get("amount"), "Amount")
+    return name, label, -cents if data.get("liability") else cents
+
+
+def _record_balance(conn, account_id: str, cents: int) -> None:
+    conn.execute("UPDATE accounts SET balance_cents = ?, balance_at = ? WHERE id = ?", (cents, db.now(), account_id))
+    conn.execute("INSERT INTO balance_snapshots (account_id, day, balance_cents) VALUES (?,?,?) "
+                 "ON CONFLICT (account_id, day) DO UPDATE SET balance_cents = excluded.balance_cents",
+                 (account_id, db.today(), cents))
+
+
+def _manual_account(conn, user_id: int, account_id: str):
+    row = conn.execute("SELECT a.id FROM accounts a JOIN connections c ON c.id = a.connection_id "
+                       "WHERE a.id = ? AND a.user_id = ? AND c.provider = 'manual'", (account_id, user_id)).fetchone()
+    if not row:
+        raise AppError("Manual account not found.", 404)
+    return row
+
+
+def add_manual_account(user_id: int, data: dict[str, Any]) -> None:
+    name, label, cents = _manual_fields(data)
+    with db.tx() as conn:
+        stamp = db.now()
+        connection = conn.execute("SELECT id FROM connections WHERE user_id = ? AND provider = 'manual'", (user_id,)).fetchone()
+        if connection:
+            connection_id = connection["id"]
+            if conn.execute("SELECT COUNT(*) FROM accounts WHERE connection_id = ?", (connection_id,)).fetchone()[0] >= MAX_MANUAL_ACCOUNTS:
+                raise AppError("Manual account limit reached.")
+        else:
+            connection_id = db.new_id()
+            conn.execute("INSERT INTO connections (id, user_id, provider, provider_item_id, institution, last_success_at, created_at) "
+                         "VALUES (?,?,?,?,?,?,?)", (connection_id, user_id, "manual", f"manual-{user_id}", "Manual accounts", stamp, stamp))
+        account_id = db.new_id()
+        conn.execute("INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, balance_cents) "
+                     "VALUES (?,?,?,?,?,?,?,0)", (account_id, user_id, connection_id, account_id, name,
+                                                  "loan" if data.get("liability") else "other", label))
+        _record_balance(conn, account_id, cents)
+
+
+def update_manual_account(user_id: int, account_id: str, data: dict[str, Any]) -> None:
+    name, label, cents = _manual_fields(data)
+    with db.tx() as conn:
+        _manual_account(conn, user_id, account_id)
+        conn.execute("UPDATE accounts SET name = ?, subtype = ?, kind = ? WHERE id = ?",
+                     (name, label, "loan" if data.get("liability") else "other", account_id))
+        _record_balance(conn, account_id, cents)
+
+
+def delete_manual_account(user_id: int, account_id: str) -> None:
+    with db.tx() as conn:
+        _manual_account(conn, user_id, account_id)
+        conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        if not conn.execute("SELECT 1 FROM accounts a JOIN connections c ON c.id = a.connection_id "
+                            "WHERE c.user_id = ? AND c.provider = 'manual'", (user_id,)).fetchone():
+            conn.execute("DELETE FROM connections WHERE user_id = ? AND provider = 'manual'", (user_id,))
+
+
 # --- Rules ---------------------------------------------------------------------
 
 def add_rule(user_id: int, data: dict[str, Any]) -> None:
