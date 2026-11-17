@@ -569,6 +569,30 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(account(state, "Roth IRA")["kind"], "investment")  # editing the amount keeps the type
         self.client.request("DELETE", f"/api/manual-accounts/{roth['id']}", {})
 
+    def test_39_notes_on_transactions(self):
+        csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
+                    "11/04/2026,11/05/2026,Corner Hardware,Shopping,Sale,-12.00,Order 4471 for shelf\n")
+        body = {"csv": csv_text, "account": "Notes Card", "mask": "4471"}
+        state = self.client.request("POST", "/api/import/csv", body)[1]["state"]
+        row = next(t for t in state["transactions"] if t["merchant"] == "Corner Hardware")
+        self.assertEqual(row["notes"], "Order 4471 for shelf")  # the bank memo is carried over
+        state = self.client.request("PATCH", f"/api/transactions/{row['id']}", {"notes": "  for the garage  "})[1]["state"]
+        self.assertEqual(next(t for t in state["transactions"] if t["id"] == row["id"])["notes"], "for the garage")
+        state = self.client.request("POST", "/api/import/csv", body)[1]["state"]  # re-import keeps the user's note
+        self.assertEqual(next(t for t in state["transactions"] if t["id"] == row["id"])["notes"], "for the garage")
+        # Any transaction can carry a note, even bank-synced ones whose other fields are read-only.
+        plaid = next(t for t in state["transactions"] if t["provider"] == "plaid")
+        state = self.client.request("PATCH", f"/api/transactions/{plaid['id']}", {"notes": "split with Sam"})[1]["state"]
+        self.assertEqual(next(t for t in state["transactions"] if t["id"] == plaid["id"])["notes"], "split with Sam")
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{plaid['id']}", {"merchant": "x", "date": "2026-11-01", "amount": 1})[0], 403)
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{plaid['id']}", {"notes": "x" * 501})[0], 400)
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{plaid['id']}", {"notes": ""})[0], 200)
+        manual = self.client.request("POST", "/api/transactions", {"merchant": "Cash tip", "date": "2026-11-09", "amount": 500,
+                                                                    "kind": "expense", "notes": "thanks!"})[1]["state"]
+        self.assertEqual(next(t for t in manual["transactions"] if t["merchant"] == "Cash tip")["notes"], "thanks!")
+        self.assertIn("for the garage", self.client.request("GET", "/api/export.csv")[1].decode("utf-8-sig"))
+        self.client.request("DELETE", f"/api/transactions/{next(t for t in manual['transactions'] if t['merchant'] == 'Cash tip')['id']}", {})
+
     def test_31_account_toggle_changes_net_worth(self):
         state = self.state()
         before = state["net_worth_history"][-1]["total"]

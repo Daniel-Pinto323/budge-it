@@ -52,6 +52,24 @@ re-syncs every `SYNC_INTERVAL_MINUTES` (default 6 hours), on demand from the
 Sync buttons, and immediately on provider webhooks when the server is reachable at
 an `https://` `PUBLIC_URL`.
 
+## Budget and activity details
+
+- **Budget status.** A category turns green ("On track"), amber above 80% ("Almost there"),
+  and red once nothing is left: **"Budget hit"** when spending equals the limit and
+  **"Budget passed!"** when it is over.
+- **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens
+  that category on the Budget page. Clicking any budget row there expands the latest
+  five transactions in that category for the month shown, with a link to see them all
+  in Activity. The ⋯ button still edits the limit.
+- **Recent activity is clickable.** Any transaction row (Overview, a budget preview,
+  or the ✎ in Activity) opens the edit dialog. Manual and CSV transactions can change
+  merchant, date and amount; bank-synced ones keep those read-only because every sync
+  rewrites them, but their category, notes and budget visibility are editable.
+- **Notes.** Every transaction has a notes field (up to 500 characters). A Chase CSV's
+  Memo column is carried into it on import; you can add or edit notes on any
+  transaction, and syncs and re-imports never overwrite them. Notes appear under the
+  merchant, are searchable, and are included in the CSV export.
+
 ## Manual data while a provider is unavailable
 
 **Account types.** The Accounts tab is grouped into **Credit cards**, **Bank

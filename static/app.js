@@ -195,14 +195,16 @@ function monthSummary(key) {
   const budget = state.categories.reduce((total, category) => total + category.budget, 0);
   return {byCategory, spent, pending, uncategorized, budget};
 }
+const hitBudget = (category, spent) => category.budget > 0 && spent >= category.budget;
 function categoryItems(summary) {
   return state.categories.map(category => {
     const spent = Math.max(0, summary.byCategory.get(category.name) || 0);
     const ratio = category.budget ? spent / category.budget : (spent ? 2 : 0);
-    return {...category, spent, ratio, status: ratio > 1 ? 'over' : ratio > 0.8 ? 'near' : 'on'};
+    return {...category, spent, ratio, status: ratio > 1 ? 'over' : hitBudget(category, spent) ? 'hit' : ratio > 0.8 ? 'near' : 'on'};
   });
 }
-const statusColor = item => ({over: '#cc725e', near: '#d9a13b', on: '#54a675'}[item.status]);
+const statusColor = item => ({over: '#cc725e', hit: '#cc725e', near: '#d9a13b', on: '#54a675'}[item.status]);
+const STATUS_LABELS = {over: 'Budget passed!', hit: 'Budget hit', near: 'Almost there', on: 'On track'};
 const leftLabel = item => item.spent > item.budget ? `${money(item.spent - item.budget)} over` : `${money(item.budget - item.spent)} left`;
 function categoryNames() {
   return [...new Set(['Uncategorized', ...state.categories.map(category => category.name), ...state.special_categories])];
@@ -244,7 +246,7 @@ function renderChrome() {
 }
 
 function transactionRow(t) {
-  return `<div class="transaction-row">${iconMarkup(t.merchant)}<div><div class="transaction-name">${esc(t.merchant)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}${t.hidden ? '<span class="hidden-badge">HIDDEN</span>' : ''}</div><div class="transaction-meta">${esc(t.category)} · ${shortDate(t.date)}</div></div><div class="transaction-amount">${signedAmount(t.amount)}<small>${esc(t.account.split(' ••')[0])}</small></div></div>`;
+  return `<div class="transaction-row clickable" role="button" tabindex="0" data-open-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">${iconMarkup(t.merchant)}<div><div class="transaction-name">${esc(t.merchant)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}${t.hidden ? '<span class="hidden-badge">HIDDEN</span>' : ''}</div><div class="transaction-meta">${esc(t.category)} · ${shortDate(t.date)}${t.notes ? ` · <span class="note-snippet">${esc(t.notes)}</span>` : ''}</div></div><div class="transaction-amount">${signedAmount(t.amount)}<small>${esc(t.account.split(' ••')[0])}</small></div></div>`;
 }
 
 function chartPoints(history, width, height, pad) {
@@ -312,7 +314,7 @@ function renderOverview() {
   $('#remainingTotal').textContent = remaining >= 0 ? `${money(remaining)} left` : `${money(-remaining)} over`;
 
   const pulse = items.filter(item => item.budget > 0).sort((a, b) => b.ratio - a.ratio).slice(0, 4);
-  $('#overviewBudget').innerHTML = pulse.map(item => `<article class="pulse-item"><div class="pulse-top"><i class="category-bullet" style="background:${esc(item.color)}"></i><span class="${item.status}">${{over: 'Over plan', near: 'Almost there', on: 'On track'}[item.status]}</span></div><strong>${esc(item.name)}</strong><small>${leftLabel(item)}</small><div class="mini-meter"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></article>`).join('')
+  $('#overviewBudget').innerHTML = pulse.map(item => `<article class="pulse-item clickable" role="button" tabindex="0" data-pulse="${esc(item.id)}" aria-label="Open ${esc(item.name)} in Budget"><div class="pulse-top"><i class="category-bullet" style="background:${esc(item.color)}"></i><span class="${item.status}">${STATUS_LABELS[item.status]}</span></div><strong>${esc(item.name)}</strong><small>${leftLabel(item)}</small><div class="mini-meter"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></article>`).join('')
     || '<p class="empty-note">Add a category with a monthly limit to see it here.</p>';
 
   $('#recentTransactions').innerHTML = state.transactions.slice(0, 6).map(transactionRow).join('')
@@ -327,6 +329,15 @@ function renderOverview() {
   renderCharts();
 }
 
+let expandedCategory = null;
+const monthLabel = key => parseDay(`${key}-01`).toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
+
+function categoryPreview(item) {
+  const all = state.transactions.filter(t => t.category === item.name && t.date.startsWith(month));
+  const latest = all.slice(0, 5);
+  return `<div class="category-preview"><p class="preview-title">Latest in ${esc(item.name)} · ${monthLabel(month)}</p>${latest.map(transactionRow).join('') || '<p class="empty-note">No transactions in this category this month.</p>'}<button class="text-button" type="button" data-view-category="${esc(item.name)}">${all.length > latest.length ? `View all ${all.length}` : 'Open in Activity'} <span>→</span></button></div>`;
+}
+
 function renderBudgets() {
   const summary = monthSummary(month);
   const items = categoryItems(summary);
@@ -335,7 +346,7 @@ function renderBudgets() {
     const members = items.filter(item => item.group === group);
     const spent = members.reduce((total, item) => total + item.spent, 0);
     const budget = members.reduce((total, item) => total + item.budget, 0);
-    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : 'No activity'}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>`).join('')}</section>`;
+    return `<section class="budget-group"><div class="group-title"><h2>${esc(group)}</h2><span>${money(spent)} of ${money(budget)}</span></div>${members.map(item => `<div class="budget-row clickable" role="button" tabindex="0" aria-expanded="${expandedCategory === item.id}" data-preview="${esc(item.id)}"><div class="budget-name"><i class="category-bullet" style="background:${esc(item.color)}"></i>${esc(item.name)}<small>${item.spent ? '' : 'No activity'}</small></div><div class="budget-progress"><div class="progress-label"><span>${item.budget ? `${Math.round(Math.min(item.ratio, 1) * 100)}% used` : 'No limit'}</span><span>${leftLabel(item)}</span></div><div class="progress-track"><span style="width:${Math.min(item.ratio * 100, 100)}%;background:${statusColor(item)}"></span></div></div><div class="budget-numbers ${item.status === 'over' || item.status === 'hit' ? 'over' : ''}"><strong>${money(item.spent)}</strong><span> of ${money(item.budget)}</span></div><button class="edit-budget" type="button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)} budget">⋯</button></div>${expandedCategory === item.id ? categoryPreview(item) : ''}`).join('')}</section>`;
   }).join('');
   if (summary.uncategorized > 0) {
     markup += `<section class="budget-group"><div class="group-title"><h2>Uncategorized</h2><span>${money(summary.uncategorized)} counted in “Spent so far”</span></div><div class="budget-row loose-row"><div class="budget-name"><i class="category-bullet" style="background:#b6beb8"></i>Purchases without a category</div><button class="text-button" type="button" data-go="transactions">Review <span>→</span></button></div></section>`;
@@ -360,12 +371,12 @@ function renderTransactions() {
   const query = $('#transactionSearch').value.trim().toLowerCase();
   const stateFilter = $('#stateFilter').value;
   const matches = state.transactions.filter(t =>
-    (!query || t.merchant.toLowerCase().includes(query) || t.category.toLowerCase().includes(query) || t.account.toLowerCase().includes(query))
+    (!query || t.merchant.toLowerCase().includes(query) || t.category.toLowerCase().includes(query) || t.account.toLowerCase().includes(query) || (t.notes || '').toLowerCase().includes(query))
     && (filter.value === 'all' || t.category === filter.value)
     && (stateFilter === 'all' || (stateFilter === 'pending') === t.pending));
   const options = selected => (names.includes(selected) ? names : [selected, ...names])
     .map(name => `<option${name === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
-  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}${t.editable ? `<button class="row-delete" type="button" data-edit-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">✎</button>` : ''}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td><button class="budget-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}">${t.hidden ? 'Hidden' : 'Included'}</button></td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td></tr>`).join('')
+  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}<button class="row-delete" type="button" data-edit-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">✎</button>${t.notes ? `<span class="note-snippet table-note-snippet" title="${esc(t.notes)}">${esc(t.notes)}</span>` : ''}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td><button class="budget-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}">${t.hidden ? 'Hidden' : 'Included'}</button></td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td></tr>`).join('')
     || `<tr><td colspan="6" class="empty-cell">${state.transactions.length ? 'No transactions match those filters.' : 'No transactions yet.'}</td></tr>`;
   $('#transactionCount').textContent = matches.length > ROW_LIMIT
     ? `Showing the latest ${ROW_LIMIT} of ${matches.length} matching transactions. Search or filter to narrow them down; the CSV export has everything.`
@@ -517,9 +528,27 @@ const ACTIONS = {
   'logout': async () => { await act(() => api('POST', '/api/logout')); showLogin(); },
 };
 
+document.addEventListener('keydown', event => {
+  const target = event.target;
+  if ((event.key === 'Enter' || event.key === ' ') && target instanceof Element && target.matches('[role="button"][tabindex]')) {
+    event.preventDefault();
+    target.click();
+  }
+});
+
 document.addEventListener('click', event => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
+  const opener = target.closest('[data-open-transaction]');
+  if (opener) { openTransactionEditor(opener.dataset.openTransaction); return; }
+  const pulse = target.closest('[data-pulse]');
+  if (pulse) {
+    expandedCategory = pulse.dataset.pulse;
+    go('budget');
+    renderBudgets();
+    document.querySelector(`[data-preview="${CSS.escape(expandedCategory)}"]`)?.scrollIntoView({block: 'center'});
+    return;
+  }
   const nav = target.closest('[data-view],[data-go]');
   if (nav) { go(nav.dataset.view || nav.dataset.go); return; }
   const brand = target.closest('a.brand');
@@ -545,12 +574,29 @@ $('#nextMonth').addEventListener('click', () => { if (month < monthKey(new Date(
 $('#budgetGroups').addEventListener('click', event => {
   const id = event.target.dataset.edit;
   const category = id && state.categories.find(item => item.id === id);
-  if (!category) return;
-  selectedCategoryId = id;
-  $('#dialogTitle').textContent = category.name;
-  $('#budgetAmount').value = category.budget / 100;
-  $('#budgetDialog').showModal();
+  if (category) {
+    selectedCategoryId = id;
+    $('#dialogTitle').textContent = category.name;
+    $('#budgetAmount').value = category.budget / 100;
+    $('#budgetDialog').showModal();
+    return;
+  }
+  const viewAll = event.target.closest('[data-view-category]');
+  if (viewAll) { viewCategoryTransactions(viewAll.dataset.viewCategory); return; }
+  const row = event.target.closest('[data-preview]');
+  if (row && !event.target.closest('button')) {
+    expandedCategory = expandedCategory === row.dataset.preview ? null : row.dataset.preview;
+    renderBudgets();
+    document.querySelector(`[data-preview="${CSS.escape(row.dataset.preview)}"]`)?.focus({preventScroll: true});
+  }
 });
+function viewCategoryTransactions(name) {
+  $('#transactionSearch').value = '';
+  $('#stateFilter').value = 'all';
+  $('#categoryFilter').value = name;
+  renderTransactions();
+  go('transactions');
+}
 $('#budgetForm').addEventListener('submit', async event => {
   event.preventDefault();
   const budget = toCents($('#budgetAmount').value);
@@ -610,23 +656,32 @@ $('#transactionTable').addEventListener('change', async event => {
     run: () => act(() => api('POST', '/api/rules', {merchant, category}), `Future ${merchant} transactions will be ${category}`),
   } : undefined);
 });
+function openTransactionEditor(id) {
+  const t = state.transactions.find(item => item.id === id);
+  if (!t) return;
+  const form = $('#editTransactionForm');
+  form.dataset.id = id;
+  form.dataset.editable = t.editable ? '1' : '';
+  const names = categoryNames();
+  form.elements.category.innerHTML = (names.includes(t.category) ? names : [t.category, ...names])
+    .map(name => `<option${name === t.category ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  form.elements.merchant.value = t.merchant;
+  form.elements.date.value = t.date;
+  form.elements.amount.value = (Math.abs(t.amount) / 100).toFixed(2);
+  form.elements.kind.value = t.amount < 0 ? 'income' : 'expense';
+  form.elements.hidden.checked = t.hidden;
+  form.elements.notes.value = t.notes || '';
+  for (const field of ['merchant', 'date', 'amount', 'kind']) form.elements[field].disabled = !t.editable;
+  $('#editTransactionHint').hidden = t.editable;
+  $('#editTransactionDialog').showModal();
+}
+
 $('#transactionTable').addEventListener('click', event => {
   const hideId = event.target.dataset.hide;
   const deleteId = event.target.dataset.deleteTransaction;
   const editId = event.target.dataset.editTransaction;
   if (editId) {
-    const t = state.transactions.find(item => item.id === editId);
-    if (!t) return;
-    const form = $('#editTransactionForm');
-    form.dataset.id = editId;
-    form.elements.category.innerHTML = (categoryNames().includes(t.category) ? categoryNames() : [t.category, ...categoryNames()])
-      .map(name => `<option${name === t.category ? ' selected' : ''}>${esc(name)}</option>`).join('');
-    form.elements.merchant.value = t.merchant;
-    form.elements.date.value = t.date;
-    form.elements.amount.value = (Math.abs(t.amount) / 100).toFixed(2);
-    form.elements.kind.value = t.amount < 0 ? 'income' : 'expense';
-    form.elements.hidden.checked = t.hidden;
-    $('#editTransactionDialog').showModal();
+    openTransactionEditor(editId);
   } else if (hideId) {
     const transaction = state.transactions.find(item => item.id === hideId);
     if (!transaction) return;
@@ -639,10 +694,11 @@ $('#transactionTable').addEventListener('click', event => {
 $('#editTransactionForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
-  const body = {
-    merchant: form.elements.merchant.value.trim(), date: form.elements.date.value, amount: toCents(form.elements.amount.value),
-    kind: form.elements.kind.value, category: form.elements.category.value, hidden: form.elements.hidden.checked,
-  };
+  const body = {category: form.elements.category.value, hidden: form.elements.hidden.checked, notes: form.elements.notes.value.trim()};
+  if (form.dataset.editable) {  // bank-synced rows are rewritten by every sync, so only manual and CSV rows change these
+    Object.assign(body, {merchant: form.elements.merchant.value.trim(), date: form.elements.date.value,
+      amount: toCents(form.elements.amount.value), kind: form.elements.kind.value});
+  }
   if (await act(() => api('PATCH', `/api/transactions/${form.dataset.id}`, body), 'Transaction updated')) $('#editTransactionDialog').close();
 });
 $('#addTransaction').addEventListener('click', () => {
@@ -657,7 +713,7 @@ $('#manualTransactionForm').addEventListener('submit', async event => {
   const body = {
     merchant: String(form.get('merchant')).trim(), date: form.get('date'), amount: toCents(form.get('amount')),
     kind: form.get('kind'), category: form.get('category'), account: String(form.get('account')).trim(),
-    hidden: form.get('hidden') === 'on',
+    hidden: form.get('hidden') === 'on', notes: String(form.get('notes') || '').trim(),
   };
   if (await act(() => api('POST', '/api/transactions', body), 'Manual transaction added')) $('#manualTransactionDialog').close();
 });

@@ -79,12 +79,14 @@ def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
         day = _date(get("transaction date"))
         if card:
             description, post, memo, category = get("description"), get("posted date"), get("card no."), get("category") or None
+            note = None
             # Debit is a purchase (money out); Credit is a payment or refund (money in).
             amount = (_cents(get("debit")) if get("debit") else 0) - (_cents(get("credit")) if get("credit") else 0)
             transfer, balance = (category or "").lower().startswith("payment"), None
             last4 = re.sub(r"\D", "", memo)[-4:] or None
         elif chase:
             description, post, memo = get("description"), get("post date"), get("memo")
+            note = memo or None
             # Chase shows card spending as negative; the app stores spending as positive.
             amount, category = -_cents(get("amount")), get("category") or None
             transfer = get("type").lower() == "payment"
@@ -92,6 +94,7 @@ def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
             last4 = None
         else:
             description, post, memo, category = get("transaction description"), "", get("account number"), None
+            note = None
             # Capital One amounts are unsigned; the Debit/Credit type gives the direction.
             magnitude = abs(_cents(get("transaction amount")))
             amount = magnitude if get("transaction type").lower() == "debit" else -magnitude
@@ -104,7 +107,7 @@ def _rows(text: str) -> tuple[str, list[dict[str, Any]]]:
         rows.append({
             "provider_txn_id": hashlib.sha256(f"{digest}#{seen[digest]}".encode()).hexdigest()[:32],
             "date": day, "merchant": description, "amount_cents": amount, "provider_category": category,
-            "transfer": transfer, "balance_cents": balance, "last4": last4,
+            "transfer": transfer, "balance_cents": balance, "last4": last4, "notes": (note or "")[:500] or None,
         })
     if not rows:
         raise AppError("No transactions found in that file.")
@@ -176,9 +179,11 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
                 category, source = keyword, "provider"
             else:
                 category, source = (hint if hint in names else "Uncategorized"), "provider"
-            existing = conn.execute("SELECT id, category, category_source FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
+            existing = conn.execute("SELECT id, category, category_source, notes FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
                                     (account_id, row["provider_txn_id"])).fetchone()
             if existing:
+                if row["notes"] and not existing["notes"]:  # carry a bank memo, never replacing a note already there
+                    conn.execute("UPDATE transactions SET notes = ? WHERE id = ?", (row["notes"], existing["id"]))
                 # Re-importing refreshes guesses, but never touches a category the user or a rule chose.
                 if existing["category_source"] == "provider" and existing["category"] != category:
                     conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, existing["id"]))
@@ -187,10 +192,10 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
             added += 1
             conn.execute(
                 "INSERT INTO transactions (id, user_id, account_id, provider_txn_id, date, merchant, amount_cents, currency, "
-                "pending, category, category_source, provider_category, hidden, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?)",
+                "pending, category, category_source, provider_category, hidden, notes, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?,?)",
                 (db.new_id(), user_id, account_id, row["provider_txn_id"], row["date"], row["merchant"], row["amount_cents"],
-                 category, source, row["provider_category"], stamp, stamp))
+                 category, source, row["provider_category"], row["notes"], stamp, stamp))
         # Exports that carry a running balance re-anchor the account (newest day wins; an older file never rewinds it).
         dated = [row for row in rows if row["balance_cents"] is not None]
         if dated:

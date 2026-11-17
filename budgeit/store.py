@@ -136,7 +136,7 @@ def state(user_id: int) -> dict[str, Any]:
         "transactions": [{
             "id": t["id"], "date": t["date"], "merchant": t["merchant"], "amount": t["amount_cents"],
             "pending": bool(t["pending"]), "category": t["category"], "hidden": bool(t["hidden"]),
-            "manual": bool(t["manual"]), "editable": bool(t["manual"]) or t["provider"] == "csv", "provider": "manual" if t["manual"] else t["provider"],
+            "notes": t["notes"] or "", "manual": bool(t["manual"]), "editable": bool(t["manual"]) or t["provider"] == "csv", "provider": "manual" if t["manual"] else t["provider"],
             "account": (t["account_label"] or "Manual entry") if t["manual"] or not t["account_name"] else _account_label(t),
         } for t in transactions],
         "rules": [dict(row) for row in rules],
@@ -235,10 +235,10 @@ def add_manual_transaction(user_id: int, data: dict[str, Any]) -> None:
         stamp = db.now()
         conn.execute(
             "INSERT INTO transactions (id, user_id, date, merchant, amount_cents, category, category_source, hidden, manual, "
-            "account_label, created_at, updated_at) VALUES (?,?,?,?,?,?,'manual',?,1,?,?,?)",
+            "account_label, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,'manual',?,1,?,?,?,?)",
             (db.new_id(), user_id, day, merchant, -amount if data.get("kind") == "income" else amount, category,
              int(bool(data.get("hidden"))), _text(data.get("account"), "Account", 60, required=False) or "Manual entry",
-             stamp, stamp),
+             _text(data.get("notes"), "Notes", 500, required=False) or None, stamp, stamp),
         )
         ledger.recompute(conn, user_id)
 
@@ -271,6 +271,9 @@ def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) 
         if "hidden" in data:
             conn.execute("UPDATE transactions SET hidden = ?, updated_at = ? WHERE id = ?",
                          (int(bool(data["hidden"])), db.now(), transaction_id))
+        if "notes" in data:
+            conn.execute("UPDATE transactions SET notes = ?, updated_at = ? WHERE id = ?",
+                         (_text(data["notes"], "Notes", 500, required=False) or None, db.now(), transaction_id))
         ledger.recompute(conn, user_id)
 
 
@@ -477,12 +480,12 @@ def _csv_safe(value: str) -> str:
 def export_csv(user_id: int) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Date", "Merchant", "Category", "Account", "Status", "Budget status", "Amount (positive = spending)"])
+    writer.writerow(["Date", "Merchant", "Category", "Account", "Status", "Budget status", "Amount (positive = spending)", "Notes"])
     for item in state(user_id)["transactions"]:
         writer.writerow([
             item["date"], _csv_safe(item["merchant"]), _csv_safe(item["category"]), _csv_safe(item["account"]),
             "Pending" if item["pending"] else "Posted", "Hidden" if item["hidden"] else "Included",
-            f"{item['amount'] / 100:.2f}",
+            f"{item['amount'] / 100:.2f}", _csv_safe(item["notes"]),
         ])
     return output.getvalue()
 

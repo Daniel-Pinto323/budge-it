@@ -29,3 +29,10 @@
 
 .account-extra{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:0 21px 14px;border-bottom:1px solid #eef0ed;font-size:11px;color:var(--muted)}.account-extra .quiet-button{padding:5px 10px;font-size:11px}
 .account-section{display:grid;gap:18px}.account-section+.account-section{margin-top:30px}.section-title{font-family:Fraunces,serif;font-size:19px;margin:0;display:flex;align-items:baseline;gap:10px}.section-title small{font-family:"DM Sans",sans-serif;font-size:12px;color:var(--muted);font-weight:400}.account-type{display:flex;align-items:center;gap:6px}.account-type select{border:1px solid var(--line);border-radius:7px;padding:4px 6px;font-size:11px;background:white}
+
+.pulse-top span.hit{color:var(--coral)}
+.clickable{cursor:pointer}.clickable:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.pulse-item.clickable:hover{border-color:#b9c8bd;box-shadow:0 2px 10px #13251d14}.transaction-row.clickable:hover .transaction-name{color:var(--green)}.budget-row.clickable:hover{background:#fbfcfa}
+.note-snippet{color:var(--muted);font-style:italic}.table-note-snippet{display:block;font-weight:400;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:2px}
+.category-preview{padding:6px 21px 14px 38px;background:#fbfcfa;border-bottom:1px solid #eef0ed}.preview-title{font-size:11px;color:var(--muted);margin:8px 0 2px;font-family:"DM Mono",monospace;text-transform:uppercase;letter-spacing:.05em}.category-preview .transaction-row:last-of-type{border-bottom:0}
+textarea{font:inherit;border:1px solid var(--line);border-radius:9px;padding:9px 12px;width:100%;resize:vertical;margin-top:7px}

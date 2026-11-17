@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE users (
@@ -85,6 +85,7 @@ CREATE TABLE transactions (
     hidden INTEGER NOT NULL DEFAULT 0,
     manual INTEGER NOT NULL DEFAULT 0,
     account_label TEXT,
+    notes TEXT,                          -- a bank memo or the user's own note; never overwritten by syncs
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, provider_txn_id)
@@ -153,12 +154,14 @@ def init(path: Path) -> None:
     if version == 0:
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif version in (1, 2, 3):
+    elif version in (1, 2, 3, 4):
         if version == 1:
             _migrate_1_to_2(conn)
         if version <= 2:
             _migrate_2_to_3(conn)
-        _migrate_3_to_4(conn)
+        if version <= 3:
+            _migrate_3_to_4(conn)
+        _migrate_4_to_5(conn)
     elif version != SCHEMA_VERSION:
         raise SystemExit(f"Database schema version {version} is not supported by this build.")
     path.chmod(0o600)
@@ -233,6 +236,17 @@ def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
                         conn.execute("INSERT OR IGNORE INTO keyword_rules (id, user_id, keyword, category) VALUES (?,?,?,?)",
                                      (new_id(), user["id"], word, category))
         conn.execute("PRAGMA user_version = 4")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+
+
+def _migrate_4_to_5(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE transactions ADD COLUMN notes TEXT")
+        conn.execute("PRAGMA user_version = 5")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
