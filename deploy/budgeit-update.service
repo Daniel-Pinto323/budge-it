@@ -1,0 +1,10 @@
+# systemd unit that runs one update check. Install as /etc/systemd/system/budgeit-update.service
+# and let budgeit-update.timer start it. Runs as root because it restarts the budgeit service.
+[Unit]
+Description=Pull the latest budge it from GitHub and restart if it changed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/budgeit-update

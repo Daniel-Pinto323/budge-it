@@ -9,7 +9,7 @@ read-only token, encrypted at rest.
 - `server.py` — entry point and admin commands
 - `budgeit/` — server: config, SQLite storage, auth, sync, provider adapters, HTTP API
 - `static/` — the browser app (plain HTML/CSS/JS, no build step)
-- `deploy/` — systemd unit and Caddy config for self-hosting
+- `deploy/` — systemd unit, Caddy config, and the auto-update script and timer for self-hosting
 - `tests/` — integration tests against fake Plaid and MX servers
 
 ## Run it locally
@@ -140,9 +140,68 @@ tokens in a restored database are unreadable and each bank must be relinked.
 
 ### Updating
 
+Manually:
+
 ```bash
-cd /opt/budgeit && git pull && systemctl restart budgeit
+cd /opt/budgeit && git pull --ff-only && systemctl restart budgeit
 ```
+
+#### Automatic updates (home server pulls from GitHub)
+
+The workflow is: edit and test on the laptop, push to `main`, and the server picks
+the change up on its own within about ten minutes. A systemd timer runs
+`deploy/budgeit-update` every 10 minutes (and 2 minutes after boot). Each run:
+
+1. `git fetch`es `main`. If there is nothing new it exits silently.
+2. Fast-forwards the checkout (`git merge --ff-only`; it never rewrites history
+   or merges, so a diverged server checkout is an error, not a surprise).
+3. Runs the test suite. **If any test fails, the checkout is rolled back to the
+   previous commit and the running app is left alone.**
+4. Copies the database to `/var/backups/budgeit/pre-update-<time>-<old commit>.sqlite3`
+   (mode `0600`, newest 10 kept) because new code may upgrade the schema on
+   startup and that cannot be undone. This is a same-machine safety net, not an
+   off-server backup; see Backups above.
+5. Restarts the `budgeit` service.
+
+`.env` and the database are untracked, so they survive updates.
+
+**Install (once, as root on the server):**
+
+```bash
+cd /opt/budgeit
+install -m 755 deploy/budgeit-update /usr/local/bin/budgeit-update
+cp deploy/budgeit-update.service deploy/budgeit-update.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now budgeit-update.timer
+```
+
+The checkout needs `git fetch` to work as root, so the GitHub deploy key (or a
+public HTTPS remote) must be usable by root. If git reports "dubious ownership",
+run `git config --global --add safe.directory /opt/budgeit`. The script itself
+only changes when you reinstall it; after pulling a change to
+`deploy/budgeit-update`, rerun the `install` line.
+
+**Operating it:**
+
+```bash
+systemctl list-timers budgeit-update.timer     # next and last run
+systemctl start budgeit-update.service         # check for updates right now
+journalctl -u budgeit-update -n 50             # what happened (updates, test failures)
+systemctl disable --now budgeit-update.timer   # turn auto-updates off
+```
+
+**Settings** (environment variables, set with `systemctl edit budgeit-update.service`
+and an `[Service]` / `Environment=` line): `BRANCH` (default `main`; set it to a
+`release` branch and push there only when a change is ready, if you do not want
+every push to go live), `APP_DIR`, `DATA_DIR`, `BACKUP_DIR`, `KEEP_BACKUPS`.
+
+**Limits to know about:** a failed update keeps retrying every 10 minutes and
+logs the test output each time until you push a fix. Dependencies are the Debian
+packages from step 2 of the install; if a change to `requirements.txt` adds one,
+the script logs a note and you must `apt install` it yourself, or the restarted
+app will fail to start. To roll back a bad release that passed the tests, `git
+reset --hard <good commit>` on the server and (so it does not move forward again)
+push a revert to the branch the server follows. To restore data, stop the service
+and copy a backup over `/var/lib/budgeit/budgeit.sqlite3`.
 
 ## Security notes
 

@@ -1,0 +1,11 @@
+# Checks GitHub for new commits every 10 minutes. Install as /etc/systemd/system/budgeit-update.timer.
+[Unit]
+Description=Check GitHub for budge it updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

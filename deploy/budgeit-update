@@ -1,0 +1,49 @@
+#!/bin/sh
+# Pull the latest main from GitHub and restart budge it, but only when there is something new.
+# Installed as /usr/local/bin/budgeit-update and run by budgeit-update.timer. See README "Automatic updates".
+#
+# Safety rails: fast-forward only (never rewrites the checkout), a database backup before every
+# restart, and the test suite must pass first. If the tests fail the checkout is rolled back and
+# the running app is left untouched.
+set -eu
+
+APP_DIR=${APP_DIR:-/opt/budgeit}
+BRANCH=${BRANCH:-main}                       # point this at a "release" branch to gate deploys
+DATA_DIR=${DATA_DIR:-/var/lib/budgeit}
+BACKUP_DIR=${BACKUP_DIR:-/var/backups/budgeit}
+KEEP_BACKUPS=${KEEP_BACKUPS:-10}
+
+cd "$APP_DIR"
+git fetch --quiet origin "$BRANCH"
+old=$(git rev-parse HEAD)
+new=$(git rev-parse "origin/$BRANCH")
+[ "$old" = "$new" ] && exit 0                # nothing new; stay quiet
+
+echo "Updating budge it: $(git rev-parse --short "$old") -> $(git rev-parse --short "$new")"
+git merge --ff-only --quiet "origin/$BRANCH"
+
+if ! python3 -B -m unittest discover -s tests >/tmp/budgeit-update-tests.log 2>&1; then
+    echo "Tests failed on $(git rev-parse --short "$new"); rolling back to $(git rev-parse --short "$old"). Output:" >&2
+    tail -n 30 /tmp/budgeit-update-tests.log >&2
+    git reset --hard --quiet "$old"
+    exit 1
+fi
+
+if git diff --name-only "$old" "$new" | grep -qx requirements.txt; then
+    echo "NOTE: requirements.txt changed. Install new dependencies (apt install python3-<pkg>) if the app fails to start." >&2
+fi
+
+# Consistent snapshot of the database before the new code (and any schema upgrade) touches it.
+if [ -f "$DATA_DIR/budgeit.sqlite3" ]; then
+    umask 077
+    mkdir -p "$BACKUP_DIR"
+    python3 -I - "$DATA_DIR/budgeit.sqlite3" "$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short "$old").sqlite3" <<'PY'
+import sqlite3, sys
+src, dst = sqlite3.connect(sys.argv[1]), sqlite3.connect(sys.argv[2])
+src.backup(dst)
+PY
+    ls -1t "$BACKUP_DIR"/pre-update-*.sqlite3 | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
+fi
+
+systemctl restart budgeit
+echo "budge it restarted on $(git rev-parse --short "$new")."
