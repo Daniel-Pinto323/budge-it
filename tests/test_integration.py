@@ -416,6 +416,14 @@ class IntegrationTest(unittest.TestCase):
         again = self.client.request("POST", "/api/import/csv", body)[1]
         self.assertEqual(again["import"], {"added": 0, "skipped": 14})
         self.assertEqual(self.client.request("POST", "/api/import/csv", {**body, "csv": "a,b\n1,2"})[0], 400)
+        edit = {"merchant": "Uber Eats lunch", "date": "2026-11-08", "amount": 1250, "kind": "expense", "category": "Fun money"}
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{sale['id']}", edit)[0], 200)
+        edited = next(t for t in self.state()["transactions"] if t["id"] == sale["id"])
+        self.assertEqual((edited["merchant"], edited["date"], edited["amount"], edited["category"]),
+                         ("Uber Eats lunch", "2026-11-08", 1250, "Fun money"))
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{sale['id']}", {**edit, "amount": 0})[0], 400)
+        plaid = next(t for t in self.state()["transactions"] if t["provider"] == "plaid")
+        self.assertEqual(self.client.request("PATCH", f"/api/transactions/{plaid['id']}", edit)[0], 403)
         self.client.request("POST", "/api/sync", {})  # must not try to sync csv connections
         csv_conn = next(c for c in self.state()["connections"] if c["provider"] == "csv")
         self.assertEqual(csv_conn["status"], "healthy")

@@ -130,7 +130,7 @@ def state(user_id: int) -> dict[str, Any]:
         "transactions": [{
             "id": t["id"], "date": t["date"], "merchant": t["merchant"], "amount": t["amount_cents"],
             "pending": bool(t["pending"]), "category": t["category"], "hidden": bool(t["hidden"]),
-            "manual": bool(t["manual"]), "provider": "manual" if t["manual"] else t["provider"],
+            "manual": bool(t["manual"]), "editable": bool(t["manual"]) or t["provider"] == "csv", "provider": "manual" if t["manual"] else t["provider"],
             "account": (t["account_label"] or "Manual entry") if t["manual"] or not t["account_name"] else _account_label(t),
         } for t in transactions],
         "rules": [dict(row) for row in rules],
@@ -234,9 +234,24 @@ def add_manual_transaction(user_id: int, data: dict[str, Any]) -> None:
 
 def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) -> None:
     with db.tx() as conn:
-        current = conn.execute("SELECT id FROM transactions WHERE id = ? AND user_id = ?", (transaction_id, user_id)).fetchone()
+        current = conn.execute(
+            "SELECT t.id, t.manual, c.provider FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id "
+            "LEFT JOIN connections c ON c.id = a.connection_id WHERE t.id = ? AND t.user_id = ?",
+            (transaction_id, user_id)).fetchone()
         if not current:
             raise AppError("Transaction not found.", 404)
+        if {"merchant", "date", "amount", "kind"} & data.keys():
+            # Bank-synced rows are rewritten by every sync, so only manual and CSV rows hold these fields.
+            if not (current["manual"] or current["provider"] == "csv"):
+                raise AppError("Only manual and CSV-imported transactions can change merchant, date, or amount.", 403)
+            merchant = _text(data.get("merchant"), "Merchant", 80)
+            amount = _cents(data.get("amount"), "Amount", minimum=1)
+            try:
+                day = date.fromisoformat(str(data.get("date"))).isoformat()
+            except ValueError as error:
+                raise AppError("Date must be YYYY-MM-DD.") from error
+            conn.execute("UPDATE transactions SET merchant = ?, date = ?, amount_cents = ?, updated_at = ? WHERE id = ?",
+                         (merchant, day, -amount if data.get("kind") == "income" else amount, db.now(), transaction_id))
         if "category" in data:
             if data["category"] not in category_names(conn, user_id):
                 raise AppError("Unknown category.")

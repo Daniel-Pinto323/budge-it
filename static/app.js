@@ -365,7 +365,7 @@ function renderTransactions() {
     && (stateFilter === 'all' || (stateFilter === 'pending') === t.pending));
   const options = selected => (names.includes(selected) ? names : [selected, ...names])
     .map(name => `<option${name === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
-  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td><button class="budget-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}">${t.hidden ? 'Hidden' : 'Included'}</button></td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td></tr>`).join('')
+  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}${t.editable ? `<button class="row-delete" type="button" data-edit-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">✎</button>` : ''}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td><button class="budget-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}">${t.hidden ? 'Hidden' : 'Included'}</button></td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td></tr>`).join('')
     || `<tr><td colspan="6" class="empty-cell">${state.transactions.length ? 'No transactions match those filters.' : 'No transactions yet.'}</td></tr>`;
   $('#transactionCount').textContent = matches.length > ROW_LIMIT
     ? `Showing the latest ${ROW_LIMIT} of ${matches.length} matching transactions. Search or filter to narrow them down; the CSV export has everything.`
@@ -539,7 +539,21 @@ $('#transactionTable').addEventListener('change', async event => {
 $('#transactionTable').addEventListener('click', event => {
   const hideId = event.target.dataset.hide;
   const deleteId = event.target.dataset.deleteTransaction;
-  if (hideId) {
+  const editId = event.target.dataset.editTransaction;
+  if (editId) {
+    const t = state.transactions.find(item => item.id === editId);
+    if (!t) return;
+    const form = $('#editTransactionForm');
+    form.dataset.id = editId;
+    form.elements.category.innerHTML = (categoryNames().includes(t.category) ? categoryNames() : [t.category, ...categoryNames()])
+      .map(name => `<option${name === t.category ? ' selected' : ''}>${esc(name)}</option>`).join('');
+    form.elements.merchant.value = t.merchant;
+    form.elements.date.value = t.date;
+    form.elements.amount.value = (Math.abs(t.amount) / 100).toFixed(2);
+    form.elements.kind.value = t.amount < 0 ? 'income' : 'expense';
+    form.elements.hidden.checked = t.hidden;
+    $('#editTransactionDialog').showModal();
+  } else if (hideId) {
     const transaction = state.transactions.find(item => item.id === hideId);
     if (!transaction) return;
     const hidden = !transaction.hidden;
@@ -547,6 +561,15 @@ $('#transactionTable').addEventListener('click', event => {
   } else if (deleteId && window.confirm('Delete this manual transaction?')) {
     act(() => api('DELETE', `/api/transactions/${deleteId}`), 'Manual transaction deleted');
   }
+});
+$('#editTransactionForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = {
+    merchant: form.elements.merchant.value.trim(), date: form.elements.date.value, amount: toCents(form.elements.amount.value),
+    kind: form.elements.kind.value, category: form.elements.category.value, hidden: form.elements.hidden.checked,
+  };
+  if (await act(() => api('PATCH', `/api/transactions/${form.dataset.id}`, body), 'Transaction updated')) $('#editTransactionDialog').close();
 });
 $('#addTransaction').addEventListener('click', () => {
   $('#manualTransactionForm').reset();
