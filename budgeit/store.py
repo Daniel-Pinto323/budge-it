@@ -117,7 +117,7 @@ def state(user_id: int) -> dict[str, Any]:
     ).fetchall()
     accounts = conn.execute(
         "SELECT id, connection_id, name, COALESCE(kind_override, kind) AS kind, subtype, mask, currency, balance_cents, available_cents, balance_at, included, "
-        "anchor_cents, anchor_date, payment_match "
+        "anchor_cents, anchor_date "
         "FROM accounts WHERE user_id = ? ORDER BY kind, name", (user_id,)
     ).fetchall()
     transactions = conn.execute(
@@ -299,11 +299,8 @@ def update_account(user_id: int, account_id: str, data: dict[str, Any]) -> None:
             # Synced providers rewrite `kind` on every sync, so their accounts keep the user's choice separately.
             column = "kind" if account["provider"] in ("csv", "manual") else "kind_override"
             conn.execute(f"UPDATE accounts SET {column} = ? WHERE id = ?", (data["kind"], account_id))
-        if {"payment_match", "amount"} & data.keys() and account["provider"] != "csv":
+        if "amount" in data and account["provider"] != "csv":
             raise AppError("Only CSV-imported accounts have a transaction-based balance.", 403)
-        if "payment_match" in data:
-            phrase = _text(data["payment_match"], "Payment match", 40, required=False).lower()
-            conn.execute("UPDATE accounts SET payment_match = ? WHERE id = ?", (phrase or None, account_id))
         if "amount" in data:
             cents = _cents(data["amount"], "Balance")
             try:

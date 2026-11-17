@@ -59,8 +59,7 @@ accounts**, **Investments** and **Loans & other**, each with its own total. When
 import a CSV the type is assumed from the file's columns and shown in the dialog
 ("Detected: …") so you can change it before importing; afterwards every account has a
 **Type** dropdown (CSV, manual, and Plaid/MX accounts alike, so a provider's
-guess can be corrected and the sync will not undo it). The type decides the section,
-and credit cards are the ones that count payments from other accounts.
+guess can be corrected and the sync will not undo it). The type decides which section the account appears in.
 
 | File | Columns that identify it | Assumed type |
 |---|---|---|
@@ -88,13 +87,11 @@ any other account:
   balance** (enter what your card app shows, whether you owe it, and the date), the
   card shows an estimate from imported transactions only. After that, only transactions dated after your date
   move it. Spending lowers a balance; refunds and payments raise it.
-- **Card payments from other accounts.** A Transfer-category transaction in another
-  account (for example `Withdrawal from CHASE CREDIT CRD AUTOPAY` in checking)
-  reduces a card's debt when its text contains the card's "payments containing…"
-  phrase (default: the first word of the account name, such as `chase`; editable
-  under the card). If the card's own export lists the same payment (same amount, within
-  5 days) it is counted once. A payment that matches several cards and is listed by
-  none is left out rather than guessed, so give each card a more specific phrase.
+- **Card payments** come from the card's own export (for example Chase's "Payment"
+  rows, or Capital One's `Payment/Credit` rows). They raise the card's balance and are
+  filed under Transfer so they do not count as spending. The app does not look at
+  withdrawals in your bank account to work out card payments, so you only need to
+  import each card's own file.
 - Only **CSV-imported** accounts work this way. Plaid and MX accounts keep the
   balances their provider reports.
 - Manual transactions are not tied to an account yet, so they do not move any

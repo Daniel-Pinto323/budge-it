@@ -385,10 +385,7 @@ function ledgerNote(account) {
   const basis = account.anchor_date
     ? `Balance as of ${shortDate(account.anchor_date)}: ${account.anchor_cents < 0 ? '−' : ''}${precise(Math.abs(account.anchor_cents))}, plus activity since then.`
     : 'Showing an estimate from imported transactions only. Enter your real balance to make it accurate.';
-  const payments = account.kind === 'credit'
-    ? `<label class="payment-match">Card payments: when a transfer in another account contains <input data-payment-match="${esc(account.id)}" value="${esc(account.payment_match || '')}" maxlength="40" placeholder="e.g. chase credit crd" /> it lowers this balance.</label><small class="payment-example">Example: a checking withdrawal “CHASE CREDIT CRD AUTOPAY” counts as a payment on the card whose text is “chase”. Clear the box to turn this off.</small>`
-    : '';
-  return `<div class="account-extra"><span>${basis}</span>${typeSelect(account)}<button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set current balance</button>${payments}</div>`;
+  return `<div class="account-extra"><span>${basis}</span>${typeSelect(account)}<button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set current balance</button></div>`;
 }
 
 function institutionCard(connection, accounts) {
@@ -721,11 +718,6 @@ $('#accountsList').addEventListener('change', event => {
   const kindId = event.target.dataset.accountKind;
   if (kindId) {
     act(() => api('PATCH', `/api/accounts/${kindId}`, {kind: event.target.value}), `Account type set to ${KIND_LABELS[event.target.value].toLowerCase()}`);
-    return;
-  }
-  const matchId = event.target.dataset.paymentMatch;
-  if (matchId) {
-    act(() => api('PATCH', `/api/accounts/${matchId}`, {payment_match: event.target.value.trim()}), 'Payment matching updated');
     return;
   }
   const id = event.target.dataset.account;

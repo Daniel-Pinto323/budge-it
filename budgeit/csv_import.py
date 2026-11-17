@@ -33,7 +33,6 @@ CATEGORY_HINTS = {
     "lodging": "Travel", "other travel": "Travel", "phone/cable": "Utilities",
 }
 IMPORT_KINDS = ("credit", "depository", "investment")
-ISSUERS = ("capital one", "american express", "bank of america", "wells fargo", "discover", "citi", "chase")
 _REQUIRED = ("transaction date", "description", "amount")
 
 
@@ -124,16 +123,6 @@ def _subtype(kind: str, name: str) -> str:
     return "savings" if "saving" in name.lower() else "checking"
 
 
-def _issuer_phrase(name: str) -> str | None:
-    """Default text that identifies payments to this card in other accounts: the issuer, else the first word."""
-    lowered = name.lower()
-    for issuer in ISSUERS:
-        if lowered.startswith(issuer):
-            return issuer
-    first = lowered.split()[0]
-    return first if len(first) >= 3 else None
-
-
 def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
     text = data.get("csv")
     if not isinstance(text, str) or not text.strip():
@@ -168,14 +157,11 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
             account_id = account["id"]
         else:
             account_id = db.new_id()
-            # Balance is derived from transactions (see ledger.py). Cards default to counting payments from
-            # other accounts that mention the issuer's first word, e.g. "chase"; this is editable per account.
-            phrase = _issuer_phrase(name)
+            # Balance is derived from the account's own transactions (see ledger.py).
             conn.execute(
                 "INSERT INTO accounts (id, user_id, connection_id, provider_account_id, name, kind, subtype, mask, "
-                "balance_cents, included, payment_match) VALUES (?,?,?,?,?,?,?,?,0,1,?)",
-                (account_id, user_id, connection_id, "csv", name, kind, _subtype(kind, name), mask,
-                 phrase if kind == "credit" else None))
+                "balance_cents, included) VALUES (?,?,?,?,?,?,?,?,0,1)",
+                (account_id, user_id, connection_id, "csv", name, kind, _subtype(kind, name), mask))
         keyword_rules = keyword_pairs(conn, user_id)
         recategorized = 0
         for row in rows:

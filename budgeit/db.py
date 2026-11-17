@@ -65,7 +65,7 @@ CREATE TABLE accounts (
     included INTEGER NOT NULL DEFAULT 1,
     anchor_cents INTEGER NOT NULL DEFAULT 0,  -- CSV accounts: a known balance ...
     anchor_date TEXT,                         -- ... as of this day (NULL = count every transaction)
-    payment_match TEXT,                       -- CSV cards: text identifying payments made from other accounts
+    payment_match TEXT,                       -- unused (card payments now come from the card's own export)
     kind_override TEXT,                       -- user-chosen account type for provider accounts (sync rewrites kind)
     UNIQUE (connection_id, provider_account_id)
 );
@@ -211,8 +211,6 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
                 conn.execute("UPDATE accounts SET anchor_cents = ?, anchor_date = "
                              "(SELECT MAX(date) FROM transactions WHERE account_id = accounts.id) WHERE id = ?",
                              (row["balance_cents"], row["id"]))
-            elif row["kind"] == "credit" and len(row["name"].split()[0]) >= 3:
-                conn.execute("UPDATE accounts SET payment_match = ? WHERE id = ?", (row["name"].split()[0].lower(), row["id"]))
         for user in conn.execute("SELECT id FROM users").fetchall():
             ledger.recompute(conn, user["id"])
         conn.execute("PRAGMA user_version = 3")

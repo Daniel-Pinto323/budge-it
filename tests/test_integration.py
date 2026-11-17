@@ -497,39 +497,31 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(state["net_worth_history"][-1]["total"], before)
         self.assertFalse(any(c["provider"] == "manual" for c in state["connections"]))
 
-    def test_39_csv_balances_follow_transactions_and_card_payments(self):
+    def test_39_csv_balances_follow_the_accounts_own_transactions(self):
         def account(state, name):
             return next(a for a in state["accounts"] if a["name"] == name)
 
         card_csv = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n11/05/2026,11/06/2026,Amazon.com,Shopping,Sale,-10.00,\n"
         state = self.client.request("POST", "/api/import/csv", {"csv": card_csv, "account": "Chase 7777", "mask": "7777"})[1]["state"]
         card = account(state, "Chase 7777")
-        self.assertEqual((card["balance_cents"], card["included"], card["payment_match"]), (-1000, True, "chase"))
+        self.assertEqual((card["balance_cents"], card["included"]), (-1000, True))
         # Anchor it to the real balance on a date: only later transactions move it.
         state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"amount": 50000, "owed": True, "as_of": "2026-11-01"})[1]["state"]
         self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)
         before = state["net_worth_history"][-1]["total"]
-        old_card = account(state, "Chase 0986")
-        self.assertEqual(old_card["payment_match"], "chase")  # two cards now match "chase": payments are ambiguous
-        # A checking withdrawal that mentions the issuer pays the card down and lowers checking.
-        bank_csv = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
-                    "7777,Withdrawal from CHASE CREDIT CRD AUTOPAY,11/10/26,Debit,25,900.00\n")
-        state = self.client.request("POST", "/api/import/csv", {"csv": bank_csv, "account": "Test Checking", "mask": "7777"})[1]["state"]
-        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)  # ambiguous, so not applied
-        self.assertEqual(account(state, "Test Checking")["balance_cents"], 90000)
-        state = self.client.request("PATCH", f"/api/accounts/{old_card['id']}", {"payment_match": ""})[1]["state"]
-        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
-        self.assertEqual(state["net_worth_history"][-1]["total"], before + 2500 + 90000)
-        # Payment matching is editable, and can be switched off.
-        state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"payment_match": ""})[1]["state"]
-        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -51000)
-        state = self.client.request("PATCH", f"/api/accounts/{card['id']}", {"payment_match": "Chase"})[1]["state"]
-        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
-        # The card's own export lists the same payment: it is counted once, not twice.
+        # A card's payment is a row in its own export, and raises the balance.
         card_csv += "11/11/2026,11/11/2026,AUTOMATIC PAYMENT - THANK YOU,,Payment,25.00,\n"
         state = self.client.request("POST", "/api/import/csv", {"csv": card_csv, "account": "Chase 7777"})[1]["state"]
         self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
-        # Editing or removing a transaction moves the balance.
+        self.assertEqual(next(t for t in state["transactions"] if t["merchant"].startswith("AUTOMATIC PAYMENT"))["category"], "Transfer")
+        self.assertEqual(state["net_worth_history"][-1]["total"], before + 2500)
+        # A matching withdrawal on the bank side does not touch the card again.
+        bank_csv = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
+                    "7777,Withdrawal from CHASE CREDIT CRD AUTOPAY,11/11/26,Debit,25,900.00\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": bank_csv, "account": "Test Checking", "mask": "7777"})[1]["state"]
+        self.assertEqual(account(state, "Chase 7777")["balance_cents"], -48500)
+        self.assertEqual(account(state, "Test Checking")["balance_cents"], 90000)
+        # Editing a transaction moves the balance.
         sale = next(t for t in state["transactions"] if t["merchant"] == "Amazon.com" and t["account"].startswith("Chase 7777"))
         state = self.client.request("PATCH", f"/api/transactions/{sale['id']}",
                                     {"merchant": "Amazon.com", "date": "2026-11-05", "amount": 3000, "kind": "expense"})[1]["state"]
@@ -548,13 +540,13 @@ class IntegrationTest(unittest.TestCase):
                 "2026-10-22,2026-10-22,6793,CAPITAL ONE AUTOPAY PYMT,Payment/Credit,,300.00\n")
         state = self.client.request("POST", "/api/import/csv", {"csv": card, "account": "Capital One Venture"})[1]["state"]
         venture = account(state, "Capital One Venture")
-        self.assertEqual((venture["kind"], venture["mask"], venture["payment_match"]), ("credit", "6793", "capital one"))
+        self.assertEqual((venture["kind"], venture["mask"]), ("credit", "6793"))
         txns = {t["merchant"]: t for t in state["transactions"] if t["account"].startswith("Capital One Venture")}
         self.assertEqual((txns["MARIANOS #538"]["amount"], txns["MARIANOS #538"]["category"]), (5857, "Groceries"))
         self.assertEqual(txns["BRFACTORY.COM"]["amount"], -8702)  # a credit is money back
         self.assertEqual(txns["CAPITAL ONE AUTOPAY PYMT"]["category"], "Transfer")
         self.assertEqual(venture["balance_cents"], 32845)  # unanchored estimate
-        # The same payment appears as a checking withdrawal: counted once, not twice.
+        # The matching withdrawal in a bank file does not change the card's balance.
         bank = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
                 "1358,Withdrawal from CAPITAL ONE CRCARDPMT,10/22/26,Debit,300,5392.09\n"
                 "1358,Monthly Interest Paid,10/31/26,Credit,1.5,5393.59\n")
