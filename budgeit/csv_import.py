@@ -20,7 +20,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from . import db, keywords, ledger
-from .store import AppError, category_names, keyword_pairs
+from .store import AppError, category_names, hidden_after_recategorize, keyword_pairs
 
 MAX_ROWS = 5000
 # Chase category -> this app's default categories. Unmapped ones stay Uncategorized.
@@ -179,23 +179,24 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
                 category, source = keyword, "provider"
             else:
                 category, source = (hint if hint in names else "Uncategorized"), "provider"
-            existing = conn.execute("SELECT id, category, category_source, notes FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
+            existing = conn.execute("SELECT id, category, category_source, notes, hidden FROM transactions WHERE account_id = ? AND provider_txn_id = ?",
                                     (account_id, row["provider_txn_id"])).fetchone()
             if existing:
                 if row["notes"] and not existing["notes"]:  # carry a bank memo, never replacing a note already there
                     conn.execute("UPDATE transactions SET notes = ? WHERE id = ?", (row["notes"], existing["id"]))
                 # Re-importing refreshes guesses, but never touches a category the user or a rule chose.
                 if existing["category_source"] == "provider" and existing["category"] != category:
-                    conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, existing["id"]))
+                    conn.execute("UPDATE transactions SET category = ?, hidden = ?, updated_at = ? WHERE id = ?",
+                                 (category, hidden_after_recategorize(existing["category"], category, existing["hidden"]), stamp, existing["id"]))
                     recategorized += 1
                 continue
             added += 1
             conn.execute(
                 "INSERT INTO transactions (id, user_id, account_id, provider_txn_id, date, merchant, amount_cents, currency, "
                 "pending, category, category_source, provider_category, hidden, notes, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,0,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,'USD',0,?,?,?,?,?,?,?)",
                 (db.new_id(), user_id, account_id, row["provider_txn_id"], row["date"], row["merchant"], row["amount_cents"],
-                 category, source, row["provider_category"], row["notes"], stamp, stamp))
+                 category, source, row["provider_category"], int(category == "Transfer"), row["notes"], stamp, stamp))
         # Exports that carry a running balance re-anchor the account (newest day wins; an older file never rewinds it).
         dated = [row for row in rows if row["balance_cents"] is not None]
         if dated:

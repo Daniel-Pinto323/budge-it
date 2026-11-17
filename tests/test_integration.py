@@ -569,6 +569,29 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(account(state, "Roth IRA")["kind"], "investment")  # editing the amount keeps the type
         self.client.request("DELETE", f"/api/manual-accounts/{roth['id']}", {})
 
+    def test_39_transfers_start_hidden_but_still_move_balances(self):
+        csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
+                    "11/03/2026,11/03/2026,AUTOMATIC PAYMENT - THANK YOU,,Payment,40.00,\n"
+                    "11/03/2026,11/03/2026,Coffee Shop,Food & Drink,Sale,-4.00,\n")
+        state = self.client.request("POST", "/api/import/csv", {"csv": csv_text, "account": "Hidden Card", "mask": "1212"})[1]["state"]
+        rows = {t["merchant"]: t for t in state["transactions"] if t["account"].startswith("Hidden Card")}
+        pay, coffee = rows["AUTOMATIC PAYMENT - THANK YOU"], rows["Coffee Shop"]
+        self.assertEqual((pay["category"], pay["hidden"], coffee["hidden"]), ("Transfer", True, False))
+        # Hidden means "not in the budget": the payment still lowers what is owed on the card.
+        self.assertEqual(next(a for a in state["accounts"] if a["name"] == "Hidden Card")["balance_cents"], 3600)
+        # Moving a transaction into or out of Transfer flips the default, and an explicit choice wins.
+        state = self.client.request("PATCH", f"/api/transactions/{coffee['id']}", {"category": "Transfer"})[1]["state"]
+        self.assertTrue(next(t for t in state["transactions"] if t["id"] == coffee["id"])["hidden"])
+        state = self.client.request("PATCH", f"/api/transactions/{coffee['id']}", {"category": "Dining"})[1]["state"]
+        self.assertFalse(next(t for t in state["transactions"] if t["id"] == coffee["id"])["hidden"])
+        state = self.client.request("PATCH", f"/api/transactions/{pay['id']}", {"category": "Transfer", "hidden": False})[1]["state"]
+        self.assertFalse(next(t for t in state["transactions"] if t["id"] == pay["id"])["hidden"])
+        state = self.client.request("POST", "/api/transactions", {"merchant": "To savings", "date": "2026-11-09", "amount": 100,
+                                                                   "kind": "expense", "category": "Transfer"})[1]["state"]
+        manual = next(t for t in state["transactions"] if t["merchant"] == "To savings")
+        self.assertTrue(manual["hidden"])
+        self.client.request("DELETE", f"/api/transactions/{manual['id']}", {})
+
     def test_39_notes_on_transactions(self):
         csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
                     "11/04/2026,11/05/2026,Corner Hardware,Shopping,Sale,-12.00,Order 4471 for shelf\n")

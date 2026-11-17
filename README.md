@@ -57,6 +57,20 @@ an `https://` `PUBLIC_URL`.
 - **Budget status.** A category turns green ("On track"), amber above 80% ("Almost there"),
   and red once nothing is left: **"Budget hit"** when spending equals the limit and
   **"Budget passed!"** when it is over.
+- **Categories in one place.** The Budget page has one **Add / edit categories** button
+  (the ⋯ on a budget row opens the same dialog). Pick **＋ New category** to create one, or
+  choose an existing category from the list to rename it, regroup it, change its limit, or
+  delete it. Typing the name of an existing category while adding is refused with a pointer
+  to the list, so you can't create a near-duplicate by mistake.
+- **Hide from budget (the eye).** Each transaction row ends in an eye: open means it counts
+  toward your budget, crossed-out means hidden. **Transfers are hidden by default** (card
+  payments, moves between your accounts), including ones imported or synced from now on and
+  existing ones. Hidden only affects budgets: transfers still move account balances, so net
+  worth stays correct (money moving between your own accounts nets to zero). Choosing
+  Transfer for a transaction hides it; choosing another category shows it again; the eye
+  always has the final say.
+- **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid or MX;
+  CSV imports, manual accounts and sample data have nothing to sync.
 - **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens
   that category on the Budget page. Clicking any budget row there expands the latest
   five transactions in that category for the month shown, with a link to see them all

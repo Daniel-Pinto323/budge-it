@@ -36,6 +36,16 @@ class AppError(Exception):
         self.status = status
 
 
+def hidden_after_recategorize(old: str | None, new: str, hidden: int) -> int:
+    """Transfers move money between your own accounts, so they are kept out of the budget by default:
+    entering Transfer hides a transaction, leaving it shows it again. An explicit choice made afterwards wins."""
+    if new == "Transfer" and old != "Transfer":
+        return 1
+    if old == "Transfer" and new != "Transfer":
+        return 0
+    return hidden
+
+
 def _text(value: Any, field: str, limit: int, required: bool = True) -> str:
     text = str(value if value is not None else "").strip()
     if required and not text:
@@ -237,7 +247,8 @@ def add_manual_transaction(user_id: int, data: dict[str, Any]) -> None:
             "INSERT INTO transactions (id, user_id, date, merchant, amount_cents, category, category_source, hidden, manual, "
             "account_label, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,'manual',?,1,?,?,?,?)",
             (db.new_id(), user_id, day, merchant, -amount if data.get("kind") == "income" else amount, category,
-             int(bool(data.get("hidden"))), _text(data.get("account"), "Account", 60, required=False) or "Manual entry",
+             int(bool(data["hidden"])) if "hidden" in data else int(category == "Transfer"),
+             _text(data.get("account"), "Account", 60, required=False) or "Manual entry",
              _text(data.get("notes"), "Notes", 500, required=False) or None, stamp, stamp),
         )
         ledger.recompute(conn, user_id)
@@ -246,7 +257,7 @@ def add_manual_transaction(user_id: int, data: dict[str, Any]) -> None:
 def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) -> None:
     with db.tx() as conn:
         current = conn.execute(
-            "SELECT t.id, t.manual, c.provider FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id "
+            "SELECT t.id, t.manual, t.category, t.hidden, c.provider FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id "
             "LEFT JOIN connections c ON c.id = a.connection_id WHERE t.id = ? AND t.user_id = ?",
             (transaction_id, user_id)).fetchone()
         if not current:
@@ -266,8 +277,9 @@ def update_transaction(user_id: int, transaction_id: str, data: dict[str, Any]) 
         if "category" in data:
             if data["category"] not in category_names(conn, user_id):
                 raise AppError("Unknown category.")
-            conn.execute("UPDATE transactions SET category = ?, category_source = 'user', updated_at = ? WHERE id = ?",
-                         (data["category"], db.now(), transaction_id))
+            conn.execute("UPDATE transactions SET category = ?, category_source = 'user', hidden = ?, updated_at = ? WHERE id = ?",
+                         (data["category"], hidden_after_recategorize(current["category"], data["category"], current["hidden"]),
+                          db.now(), transaction_id))
         if "hidden" in data:
             conn.execute("UPDATE transactions SET hidden = ?, updated_at = ? WHERE id = ?",
                          (int(bool(data["hidden"])), db.now(), transaction_id))
@@ -423,11 +435,12 @@ def apply_keyword_rules(user_id: int) -> dict[str, int]:
 def _apply_keyword_rules(conn, user_id: int) -> int:
     rules, names, changed = keyword_pairs(conn, user_id), category_names(conn, user_id), 0
     stamp = db.now()
-    for row in conn.execute("SELECT id, merchant, category FROM transactions WHERE user_id = ? AND manual = 0 "
+    for row in conn.execute("SELECT id, merchant, category, hidden FROM transactions WHERE user_id = ? AND manual = 0 "
                             "AND category_source = 'provider'", (user_id,)).fetchall():
         category = keywords.match(rules, row["merchant"])
         if category in names and category != row["category"]:
-            conn.execute("UPDATE transactions SET category = ?, updated_at = ? WHERE id = ?", (category, stamp, row["id"]))
+            conn.execute("UPDATE transactions SET category = ?, hidden = ?, updated_at = ? WHERE id = ?",
+                         (category, hidden_after_recategorize(row["category"], category, row["hidden"]), stamp, row["id"]))
             changed += 1
     ledger.recompute(conn, user_id)
     return changed

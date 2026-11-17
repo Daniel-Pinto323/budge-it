@@ -271,12 +271,14 @@ class SyncService:
                     if previous["category_source"] == "user" and previous["category"] in names:
                         category, source = previous["category"], "user"
         if existing:
+            hidden = store.hidden_after_recategorize(existing["category"], category, existing["hidden"])
             conn.execute(
                 "UPDATE transactions SET date = ?, merchant = ?, amount_cents = ?, currency = ?, pending = ?, category = ?, "
-                "category_source = ?, provider_category = ?, updated_at = ? WHERE id = ?",
+                "category_source = ?, provider_category = ?, hidden = ?, updated_at = ? WHERE id = ?",
                 (item["date"], item["merchant"][:120], item["amount_cents"], item["currency"], int(item["pending"]), category,
-                 source, item["provider_category"], stamp, existing["id"]))
+                 source, item["provider_category"], hidden, stamp, existing["id"]))
         else:
+            hidden = 1 if category == "Transfer" else hidden  # transfers stay out of the budget by default
             conn.execute(
                 "INSERT INTO transactions (id, user_id, account_id, provider_txn_id, date, merchant, amount_cents, currency, pending, "
                 "category, category_source, provider_category, hidden, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

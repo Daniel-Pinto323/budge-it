@@ -24,7 +24,6 @@ let csrf = '';
 let state = null;
 let month = monthKey(new Date());
 let stateLoadedAt = 0;
-let selectedCategoryId = null;
 let mxReconnect = false;
 
 // --- Formatting ---------------------------------------------------------------
@@ -216,6 +215,7 @@ function netWorth() {
   const sum = list => list.reduce((total, account) => total + account.balance_cents, 0);
   return {assets, debts, assetTotal: sum(assets), debtTotal: sum(debts), total: sum(included)};
 }
+const syncableConnections = () => state.connections.filter(connection => ['plaid', 'mx'].includes(connection.provider));
 const realConnections = () => state.connections.filter(connection => !['demo', 'manual'].includes(connection.provider));
 
 // --- Rendering ----------------------------------------------------------------
@@ -362,6 +362,9 @@ function renderBudgets() {
   $('#categoryGroups').innerHTML = [...new Set(state.categories.map(category => category.group))].map(group => `<option value="${esc(group)}"></option>`).join('');
 }
 
+const EYE = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.1 10.1 0 0 1 12 19C5.6 19 2 12 2 12a18 18 0 0 1 4.1-5.1M9.9 5.2A9.7 9.7 0 0 1 12 5c6.4 0 10 7 10 7a18 18 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M2 2l20 20"/></svg>';
+
 function renderTransactions() {
   const names = categoryNames();
   const filter = $('#categoryFilter');
@@ -376,7 +379,7 @@ function renderTransactions() {
     && (stateFilter === 'all' || (stateFilter === 'pending') === t.pending));
   const options = selected => (names.includes(selected) ? names : [selected, ...names])
     .map(name => `<option${name === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
-  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}<button class="row-delete" type="button" data-edit-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">✎</button>${t.notes ? `<span class="note-snippet table-note-snippet" title="${esc(t.notes)}">${esc(t.notes)}</span>` : ''}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td><button class="budget-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}">${t.hidden ? 'Hidden' : 'Included'}</button></td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td></tr>`).join('')
+  $('#transactionTable').innerHTML = matches.slice(0, ROW_LIMIT).map(t => `<tr class="${t.hidden ? 'budget-hidden-row' : ''}"><td>${shortDate(t.date)}${t.pending ? '<span class="pending-badge">PENDING</span>' : ''}</td><td><div class="merchant-cell">${iconMarkup(t.merchant)}${esc(t.merchant)}<button class="row-delete" type="button" data-edit-transaction="${esc(t.id)}" aria-label="Edit ${esc(t.merchant)}">✎</button>${t.notes ? `<span class="note-snippet table-note-snippet" title="${esc(t.notes)}">${esc(t.notes)}</span>` : ''}${t.manual ? `<span class="manual-badge">MANUAL</span><button class="row-delete" type="button" data-delete-transaction="${esc(t.id)}" aria-label="Delete ${esc(t.merchant)}">×</button>` : ''}</div></td><td><select class="category-select" data-transaction="${esc(t.id)}" aria-label="Category for ${esc(t.merchant)}">${options(t.category)}</select></td><td>${esc(t.account)}</td><td class="amount ${t.amount < 0 ? 'income' : ''}">${signedAmount(t.amount)}</td><td class="eye-col"><button class="eye-toggle ${t.hidden ? 'is-hidden' : ''}" type="button" data-hide="${esc(t.id)}" aria-pressed="${t.hidden}" title="${t.hidden ? 'Hidden from your budget. Click to include.' : 'Counts toward your budget. Click to hide.'}" aria-label="${t.hidden ? 'Hidden from budget; include' : 'Included in budget; hide'} ${esc(t.merchant)}">${t.hidden ? EYE_OFF : EYE}</button></td></tr>`).join('')
     || `<tr><td colspan="6" class="empty-cell">${state.transactions.length ? 'No transactions match those filters.' : 'No transactions yet.'}</td></tr>`;
   $('#transactionCount').textContent = matches.length > ROW_LIMIT
     ? `Showing the latest ${ROW_LIMIT} of ${matches.length} matching transactions. Search or filter to narrow them down; the CSV export has everything.`
@@ -412,7 +415,16 @@ function institutionCard(connection, accounts) {
   return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
 }
 
+function renderSyncButtons() {
+  const none = !syncableConnections().length;
+  $$('[data-action="sync-all"]').forEach(button => {
+    button.setAttribute('aria-disabled', String(none));
+    button.title = none ? 'No externally linked accounts to sync' : '';
+  });
+}
+
 function renderAccounts() {
+  renderSyncButtons();
   const real = realConnections();
   $('#accountsSubhead').textContent = real.length
     ? `${real.length} institution${real.length === 1 ? '' : 's'} connected · ${state.accounts.length} account${state.accounts.length === 1 ? '' : 's'}`
@@ -556,11 +568,11 @@ document.addEventListener('click', event => {
   const close = target.closest('[data-close]');
   if (close) { close.closest('dialog').close(); return; }
   const action = target.closest('[data-action]');
-  if (action && ACTIONS[action.dataset.action]) ACTIONS[action.dataset.action]();
+  if (action && action.getAttribute('aria-disabled') !== 'true' && ACTIONS[action.dataset.action]) ACTIONS[action.dataset.action]();
 });
 
 async function syncAll() {
-  if (!realConnections().length) { toast('Nothing to sync yet — connect an institution first.'); return; }
+  if (!syncableConnections().length) { toast('No externally linked accounts to sync.'); return; }
   $('#syncChip').textContent = 'Syncing…';
   await act(() => api('POST', '/api/sync'), 'Sync finished');
   renderChrome();
@@ -573,14 +585,7 @@ $('#nextMonth').addEventListener('click', () => { if (month < monthKey(new Date(
 
 $('#budgetGroups').addEventListener('click', event => {
   const id = event.target.dataset.edit;
-  const category = id && state.categories.find(item => item.id === id);
-  if (category) {
-    selectedCategoryId = id;
-    $('#dialogTitle').textContent = category.name;
-    $('#budgetAmount').value = category.budget / 100;
-    $('#budgetDialog').showModal();
-    return;
-  }
+  if (id) { openCategoryDialog(id); return; }
   const viewAll = event.target.closest('[data-view-category]');
   if (viewAll) { viewCategoryTransactions(viewAll.dataset.viewCategory); return; }
   const row = event.target.closest('[data-preview]');
@@ -597,44 +602,62 @@ function viewCategoryTransactions(name) {
   renderTransactions();
   go('transactions');
 }
-$('#budgetForm').addEventListener('submit', async event => {
-  event.preventDefault();
-  const budget = toCents($('#budgetAmount').value);
-  if (!selectedCategoryId || !Number.isFinite(budget) || budget < 0) return;
-  if (await act(() => api('PATCH', `/api/categories/${selectedCategoryId}`, {budget}), 'Budget updated')) $('#budgetDialog').close();
-});
-$('#addBudget').addEventListener('click', () => {
-  $('#categoryForm').reset();
-  $('#categoryGroup').value = state.categories[0]?.group || '';
+// One dialog adds and edits categories: pick "+ New category" or an existing one from the list.
+
+function categoryFormMode() {
+  return $('#categoryPicker').value ? state.categories.find(item => item.id === $('#categoryPicker').value) : null;
+}
+function fillCategoryForm() {
+  const category = categoryFormMode();
+  const form = $('#categoryForm');
+  $('#categoryError').hidden = true;
+  form.elements.name.value = category ? category.name : '';
+  form.elements.group.value = category ? category.group : (state.categories[0]?.group || '');
+  form.elements.budget.value = category ? category.budget / 100 : 0;
+  $('#categorySubmit').textContent = category ? 'Save changes' : 'Add category';
+  $('#deleteCategory').hidden = !category;
+  $('#categoryHint').textContent = category
+    ? 'Rename it, move it to another group, or change its limit. Deleting keeps its transactions and marks them Uncategorized.'
+    : 'Create a new budget category. To change one that already exists, choose it from the list above.';
+}
+function openCategoryDialog(selectedId = '') {
+  const groups = [...new Set(state.categories.map(category => category.group))];
+  $('#categoryPicker').innerHTML = '<option value="">＋ New category</option>' + groups.map(group =>
+    `<optgroup label="${esc(group)}">${state.categories.filter(category => category.group === group)
+      .map(category => `<option value="${esc(category.id)}">${esc(category.name)}</option>`).join('')}</optgroup>`).join('');
+  $('#categoryPicker').value = state.categories.some(category => category.id === selectedId) ? selectedId : '';
+  fillCategoryForm();
   $('#categoryDialog').showModal();
-});
+  (categoryFormMode() ? $('#categoryBudget') : $('#categoryName')).focus();
+}
+$('#manageCategories').addEventListener('click', () => openCategoryDialog());
+$('#categoryPicker').addEventListener('change', fillCategoryForm);
 $('#categoryForm').addEventListener('submit', async event => {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const body = {name: String(form.get('name')).trim(), group: String(form.get('group')).trim(), budget: toCents(form.get('budget'))};
-  if (await act(() => api('POST', '/api/categories', body), `${body.name} category added`)) $('#categoryDialog').close();
-});
-
-function renderCategoryManager() {
-  $('#categoryManagerList').innerHTML = state.categories.map(category => `<div class="category-admin-row" data-category="${esc(category.id)}"><div class="category-admin-fields"><label>Name<input data-field="name" value="${esc(category.name)}" maxlength="30" /></label><label>Group<input data-field="group" value="${esc(category.group)}" maxlength="30" list="categoryGroups" /></label><label>Monthly limit<input data-field="budget" type="number" min="0" step="1" value="${category.budget / 100}" /></label></div><div class="category-admin-actions"><button class="quiet-button" type="button" data-save>Save</button><button class="delete-category" type="button" data-delete>Delete</button></div></div>`).join('')
-    || '<p class="empty-note">No categories yet.</p>';
-}
-$('#manageCategories').addEventListener('click', () => { renderCategoryManager(); $('#categoryManagerDialog').showModal(); });
-$('#categoryManagerList').addEventListener('click', async event => {
-  const row = event.target.closest('.category-admin-row');
-  const category = row && state.categories.find(item => item.id === row.dataset.category);
-  if (!category) return;
-  if ('delete' in event.target.dataset) {
-    if (!window.confirm(`Delete “${category.name}”? Its transactions are kept and marked Uncategorized.`)) return;
-    await act(() => api('DELETE', `/api/categories/${category.id}`), `${category.name} deleted`);
-  } else if ('save' in event.target.dataset) {
-    const field = name => row.querySelector(`[data-field="${name}"]`).value.trim();
-    const body = {name: field('name'), group: field('group'), budget: toCents(field('budget'))};
-    await act(() => api('PATCH', `/api/categories/${category.id}`, body), `${body.name} saved`);
-  } else {
+  const form = event.currentTarget;
+  const category = categoryFormMode();
+  const body = {name: form.elements.name.value.trim(), group: form.elements.group.value.trim(), budget: toCents(form.elements.budget.value)};
+  const error = $('#categoryError');
+  const clash = state.categories.find(item => item.name.toLowerCase() === body.name.toLowerCase() && (!category || item.id !== category.id));
+  if (clash) {
+    error.textContent = category ? `Another category is already called “${clash.name}”.` : `“${clash.name}” already exists. Choose it from the list above to edit it instead.`;
+    error.hidden = false;
     return;
   }
-  renderCategoryManager();
+  try {
+    await (category ? api('PATCH', `/api/categories/${category.id}`, body) : api('POST', '/api/categories', body));
+  } catch (failure) {
+    error.textContent = failure.message || 'Something went wrong.';
+    error.hidden = false;
+    return;
+  }
+  $('#categoryDialog').close();
+  toast(category ? `${body.name} saved` : `${body.name} category added`);
+});
+$('#deleteCategory').addEventListener('click', async () => {
+  const category = categoryFormMode();
+  if (!category || !window.confirm(`Delete “${category.name}”? Its transactions are kept and marked Uncategorized.`)) return;
+  if (await act(() => api('DELETE', `/api/categories/${category.id}`), `${category.name} deleted`)) $('#categoryDialog').close();
 });
 
 // --- Transactions -------------------------------------------------------------
@@ -677,7 +700,7 @@ function openTransactionEditor(id) {
 }
 
 $('#transactionTable').addEventListener('click', event => {
-  const hideId = event.target.dataset.hide;
+  const hideId = event.target.closest('[data-hide]')?.dataset.hide;
   const deleteId = event.target.dataset.deleteTransaction;
   const editId = event.target.dataset.editTransaction;
   if (editId) {
@@ -691,6 +714,14 @@ $('#transactionTable').addEventListener('click', event => {
     act(() => api('DELETE', `/api/transactions/${deleteId}`), 'Manual transaction deleted');
   }
 });
+$('#editTransactionForm').elements.category.addEventListener('change', event => {
+  // Transfers stay out of the budget by default; picking another category brings it back.
+  const form = $('#editTransactionForm');
+  const t = state.transactions.find(item => item.id === form.dataset.id);
+  if (event.target.value === 'Transfer') form.elements.hidden.checked = true;
+  else if (t && t.category === 'Transfer') form.elements.hidden.checked = false;
+});
+$('#manualCategory').addEventListener('change', event => { $('#manualBudgetHidden').checked = event.target.value === 'Transfer'; });
 $('#editTransactionForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
