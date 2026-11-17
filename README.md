@@ -69,6 +69,9 @@ an `https://` `PUBLIC_URL`.
   worth stays correct (money moving between your own accounts nets to zero). Choosing
   Transfer for a transaction hides it; choosing another category shows it again; the eye
   always has the final say.
+- **Sync status** (bottom of the sidebar) reports the last successful Plaid/MX sync. With only
+  CSV imports and manual accounts it says "No linked accounts · CSV & manual data only"
+  instead of implying anything synced.
 - **Sync all** is greyed out, with a hover note, when nothing is linked through Plaid or MX;
   CSV imports, manual accounts and sample data have nothing to sync.
 - **Budget pulse and budgets are clickable.** Clicking a pulse tile on Overview opens

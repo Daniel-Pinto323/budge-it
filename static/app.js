@@ -237,11 +237,14 @@ function renderChrome() {
   $('#monthLabel').textContent = label.toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
   $('#nextMonth').disabled = month >= monthKey(new Date());
   $('#demoBanner').hidden = !state.has_demo;
-  const connections = realConnections();
+  // Only Plaid/MX connections can sync; CSV imports and manual accounts are updated by hand.
+  const connections = syncableConnections();
   const latest = connections.map(connection => connection.last_success_at).filter(Boolean).sort().pop();
   const troubled = connections.some(connection => connection.status !== 'healthy');
-  $('#syncChip').textContent = !connections.length ? 'No bank connected' : troubled ? 'Connection needs attention'
-    : latest ? `Synced ${ago(latest)}` : 'Not synced yet';
+  const handEntered = state.connections.some(connection => ['csv', 'manual'].includes(connection.provider));
+  $('#syncChip').textContent = !connections.length ? (handEntered ? 'No linked accounts · CSV & manual data only' : 'No linked accounts')
+    : troubled ? 'Connection needs attention' : latest ? `Synced ${ago(latest)}` : 'Not synced yet';
+  $('#syncChip').title = connections.length ? '' : 'Nothing is linked through Plaid or MX, so nothing syncs automatically. Import CSVs or edit manual accounts to update your data.';
   $('#syncPulse').style.background = !connections.length ? '#c4ccc6' : troubled ? '#d9a13b' : '#58a779';
 }
 
