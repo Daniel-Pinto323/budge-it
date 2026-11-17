@@ -30,9 +30,14 @@ let mxReconnect = false;
 
 const wholeDollars = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 0});
 const exactDollars = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'});
-const money = cents => wholeDollars.format(cents / 100);
-const precise = cents => exactDollars.format(cents / 100);
-const signedAmount = cents => (cents < 0 ? '+' : '') + precise(-cents);
+// A word joiner (U+2060) between a sign and the "$" removes the line-break opportunity there. Without it a narrow
+// column can strand the "-", "−" or "+" on a line of its own, above the amount.
+const MINUS = '−\u2060';
+const PLUS = '+\u2060';
+const glue = text => text.replace(/^([-−+])(?=\$)/, '$1\u2060');
+const money = cents => glue(wholeDollars.format(cents / 100));
+const precise = cents => glue(exactDollars.format(cents / 100));
+const signedAmount = cents => glue((cents < 0 ? '+' : '') + exactDollars.format(-cents / 100));
 const toCents = value => Math.round(Number(value) * 100);
 
 function monthKey(date) {
@@ -287,7 +292,7 @@ function worthTrend() {
   const cutoff = new Date(parseDay(latest.day).getTime() - 30 * 86400000);
   const baseline = [...history].reverse().find(point => parseDay(point.day) <= cutoff) || history[0];
   const change = latest.total - baseline.total;
-  return `<span class="${change >= 0 ? 'good' : ''}">${change >= 0 ? '+' : '−'}${money(Math.abs(change))}</span><small>since ${shortDate(baseline.day)}</small>`;
+  return `<span class="${change >= 0 ? 'good' : ''}">${change >= 0 ? PLUS : MINUS}${money(Math.abs(change))}</span><small>since ${shortDate(baseline.day)}</small>`;
 }
 
 function attentionItems(summary, items) {
@@ -400,7 +405,7 @@ function manualNote(account) {
 
 function ledgerNote(account) {
   const basis = account.anchor_date
-    ? `Balance as of ${shortDate(account.anchor_date)}: ${account.anchor_cents < 0 ? '−' : ''}${precise(Math.abs(account.anchor_cents))}, plus activity since then.`
+    ? `Balance as of ${shortDate(account.anchor_date)}: ${account.anchor_cents < 0 ? MINUS : ''}${precise(Math.abs(account.anchor_cents))}, plus activity since then.`
     : 'Showing an estimate from imported transactions only. Enter your real balance to make it accurate.';
   return `<div class="account-extra"><span>${basis}</span>${typeSelect(account)}<button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set current balance</button></div>`;
 }
@@ -412,7 +417,7 @@ function institutionCard(connection, accounts) {
   const [tone, label] = demo ? ['', 'Sample data'] : csv ? ['', 'CSV import'] : manual ? ['', 'Manual'] : (STATUS[connection.status] || STATUS.error);
   const source = demo ? 'synthetic' : csv ? `imported from CSV · ${ago(connection.last_success_at)}` : manual ? 'entered by hand' : `via ${connection.provider === 'plaid' ? 'Plaid' : 'MX'} · synced ${ago(connection.last_success_at)}`;
   const id = esc(connection.id);
-  const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || KIND_LABELS[account.kind] || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : manual ? manualNote(account) : `<div class="account-extra">${typeSelect(account)}</div>`}`).join('')
+  const rows = accounts.map(account => `<div class="account-row"><div class="account-name">${esc(account.name)}<small>${esc(account.subtype || KIND_LABELS[account.kind] || account.kind)}${account.mask ? ` ••${esc(account.mask)}` : ''}</small></div><div class="account-balance">${account.balance_cents < 0 ? MINUS : ''}${precise(Math.abs(account.balance_cents))}<small>${account.balance_cents < 0 ? 'Owed' : 'Balance'} · ${ago(account.balance_at)}</small></div><input class="toggle" type="checkbox" ${account.included ? 'checked' : ''} data-account="${esc(account.id)}" aria-label="Include ${esc(account.name)} in net worth" /></div>${csv ? ledgerNote(account) : manual ? manualNote(account) : `<div class="account-extra">${typeSelect(account)}</div>`}`).join('')
     || '<p class="empty-note padded">No accounts imported yet. Try Sync in a minute.</p>';
   const actions = demo || manual ? '' : csv ? `<div class="connection-actions"><button class="delete-category" type="button" data-disconnect="${id}">Remove</button></div>` : `<div class="connection-actions">${connection.status !== 'healthy' ? `<button class="primary-button" type="button" data-reconnect="${id}">Reconnect</button>` : ''}<button class="quiet-button" type="button" data-sync="${id}">↻ Sync</button><button class="delete-category" type="button" data-disconnect="${id}">Disconnect</button></div>`;
   return `<section class="institution-card"><div class="institution-head"><div class="institution-logo">${esc(initials(connection.institution))}</div><div><h2>${esc(connection.institution)}</h2><p>${accounts.length} account${accounts.length === 1 ? '' : 's'} · ${source}</p></div><span class="sync-status ${tone}">${label}</span></div>${connection.error && !demo ? `<p class="connection-error">${esc(connection.error)}</p>` : ''}${rows}${actions}</section>`;
@@ -440,7 +445,7 @@ function renderAccounts() {
       const accounts = inSection.filter(account => account.connection_id === connection.id);
       return accounts.length ? institutionCard(connection, accounts) : '';
     }).join('');
-    return `<div class="account-section"><h2 class="section-title">${title}<small>${inSection.length} · ${total < 0 ? '−' : ''}${money(Math.abs(total))}</small></h2>${cards}</div>`;
+    return `<div class="account-section"><h2 class="section-title">${title}<small>${inSection.length} · ${total < 0 ? MINUS : ''}${money(Math.abs(total))}</small></h2>${cards}</div>`;
   }).join('');
   const waiting = state.connections.filter(connection => !state.accounts.some(account => account.connection_id === connection.id))
     .map(connection => institutionCard(connection, [])).join('');
@@ -455,13 +460,13 @@ function renderWorth() {
   $('#netWorthTotal').textContent = money(worth.total);
   $('#netWorthTrendLarge').innerHTML = worthTrend();
   $('#assetTotal').textContent = money(worth.assetTotal);
-  $('#debtTotal').textContent = `−${money(Math.abs(worth.debtTotal))}`;
+  $('#debtTotal').textContent = `${MINUS}${money(Math.abs(worth.debtTotal))}`;
   const institutions = new Map(state.connections.map(connection => [connection.id, connection.institution]));
-  const rows = (accounts, debt) => accounts.map(account => `<div class="worth-row"><div class="worth-name"><i style="background:${debt ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(institutions.get(account.connection_id) || '')} · ${esc(account.subtype || account.kind)}</small></div></div><strong>${debt ? '−' : ''}${money(Math.abs(account.balance_cents))}</strong></div>`).join('')
+  const rows = (accounts, debt) => accounts.map(account => `<div class="worth-row"><div class="worth-name"><i style="background:${debt ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(institutions.get(account.connection_id) || '')} · ${esc(account.subtype || account.kind)}</small></div></div><strong>${debt ? MINUS : ''}${money(Math.abs(account.balance_cents))}</strong></div>`).join('')
     || '<p class="empty-note">None included.</p>';
   const manualIds = new Set(state.connections.filter(connection => connection.provider === 'manual').map(connection => connection.id));
   const manualAccounts = state.accounts.filter(account => manualIds.has(account.connection_id));
-  $('#manualAccountsList').innerHTML = manualAccounts.map(account => `<div class="manual-row"><div class="worth-name"><i style="background:${account.balance_cents < 0 ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(account.subtype || (account.balance_cents < 0 ? 'Liability' : 'Asset'))} · updated ${ago(account.balance_at)}${account.included ? '' : ' · excluded'}</small></div></div><div class="manual-actions"><strong>${account.balance_cents < 0 ? '−' : ''}${precise(Math.abs(account.balance_cents))}</strong><button type="button" data-edit-manual="${esc(account.id)}" aria-label="Edit ${esc(account.name)}">✎</button><button type="button" data-delete-manual="${esc(account.id)}" aria-label="Delete ${esc(account.name)}">×</button></div></div>`).join('')
+  $('#manualAccountsList').innerHTML = manualAccounts.map(account => `<div class="manual-row"><div class="worth-name"><i style="background:${account.balance_cents < 0 ? '#cc725e' : '#54a675'}"></i><div>${esc(account.name)}<small>${esc(account.subtype || (account.balance_cents < 0 ? 'Liability' : 'Asset'))} · updated ${ago(account.balance_at)}${account.included ? '' : ' · excluded'}</small></div></div><div class="manual-actions"><strong>${account.balance_cents < 0 ? MINUS : ''}${precise(Math.abs(account.balance_cents))}</strong><button type="button" data-edit-manual="${esc(account.id)}" aria-label="Edit ${esc(account.name)}">✎</button><button type="button" data-delete-manual="${esc(account.id)}" aria-label="Delete ${esc(account.name)}">×</button></div></div>`).join('')
     || '<p class="empty-note">No manual accounts yet.</p>';
   $('#assetsList').innerHTML = rows(worth.assets, false);
   $('#debtsList').innerHTML = rows(worth.debts, true);
