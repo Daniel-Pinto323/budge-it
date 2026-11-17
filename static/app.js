@@ -383,12 +383,12 @@ function manualNote(account) {
 
 function ledgerNote(account) {
   const basis = account.anchor_date
-    ? `Balance is ${precise(Math.abs(account.anchor_cents))}${account.anchor_cents < 0 ? ' owed' : ''} on ${shortDate(account.anchor_date)}, plus transactions since.`
-    : 'Estimated from imported transactions only. Set your actual balance to anchor it.';
+    ? `Balance as of ${shortDate(account.anchor_date)}: ${account.anchor_cents < 0 ? '−' : ''}${precise(Math.abs(account.anchor_cents))}, plus activity since then.`
+    : 'Showing an estimate from imported transactions only. Enter your real balance to make it accurate.';
   const payments = account.kind === 'credit'
-    ? `<label class="payment-match">Count payments from other accounts containing <input data-payment-match="${esc(account.id)}" value="${esc(account.payment_match || '')}" maxlength="40" placeholder="e.g. chase credit crd" /></label>`
+    ? `<label class="payment-match">Card payments: when a transfer in another account contains <input data-payment-match="${esc(account.id)}" value="${esc(account.payment_match || '')}" maxlength="40" placeholder="e.g. chase credit crd" /> it lowers this balance.</label><small class="payment-example">Example: a checking withdrawal “CHASE CREDIT CRD AUTOPAY” counts as a payment on the card whose text is “chase”. Clear the box to turn this off.</small>`
     : '';
-  return `<div class="account-extra"><span>${basis}</span>${typeSelect(account)}<button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set balance</button>${payments}</div>`;
+  return `<div class="account-extra"><span>${basis}</span>${typeSelect(account)}<button class="quiet-button" type="button" data-set-balance="${esc(account.id)}">Set current balance</button>${payments}</div>`;
 }
 
 function institutionCard(connection, accounts) {
@@ -740,7 +740,7 @@ $('#accountsList').addEventListener('click', event => {
     if (!account) return;
     const form = $('#setBalanceForm');
     form.dataset.id = balanceId;
-    $('#setBalanceTitle').textContent = `Set balance — ${account.name}`;
+    $('#setBalanceTitle').textContent = `Set current balance — ${account.name}`;
     form.elements.owed.value = (account.balance_cents < 0 || (account.kind === 'credit' && !account.balance_cents)) ? '1' : '';
     form.elements.amount.value = (Math.abs(account.balance_cents) / 100).toFixed(2);
     form.elements.as_of.value = todayISO();

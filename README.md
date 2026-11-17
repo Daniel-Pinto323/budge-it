@@ -84,9 +84,9 @@ any other account:
 
 - A **Capital One bank** file carries a `Balance` column, so its newest row anchors the
   account automatically.
-- A **Chase** file has no balance. Until you press **Set balance** (enter what the
-  bank shows, whether you owe it, and the date), the card shows an estimate from
-  imported transactions only. After that, only transactions dated after your date
+- A **Chase** or **Capital One card** file has no balance. Until you press **Set current
+  balance** (enter what your card app shows, whether you owe it, and the date), the
+  card shows an estimate from imported transactions only. After that, only transactions dated after your date
   move it. Spending lowers a balance; refunds and payments raise it.
 - **Card payments from other accounts.** A Transfer-category transaction in another
   account (for example `Withdrawal from CHASE CREDIT CRD AUTOPAY` in checking)
