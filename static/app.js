@@ -814,8 +814,28 @@ $('#manualTransactionForm').addEventListener('submit', async event => {
 $('#importCsvButton').addEventListener('click', () => {
   $('#importCsvForm').reset();
   $('#importCsvDetected').textContent = '';
+  const csvIds = new Set(state.connections.filter(connection => connection.provider === 'csv').map(connection => connection.id));
+  $('#importCsvTarget').innerHTML = '<option value="">New account</option>' + state.accounts.filter(account => csvIds.has(account.connection_id))
+    .map(account => `<option value="${esc(account.id)}" data-mask="${esc(account.mask || '')}" data-kind="${esc(account.kind)}">${esc(account.name)}${account.mask ? ` ••${esc(account.mask)}` : ''}</option>`).join('');
+  syncImportTarget();
   $('#importCsvDialog').showModal();
 });
+// Choosing an existing account hides the name fields: the import goes into that account whatever it is called.
+function syncImportTarget() {
+  const existing = !!$('#importCsvTarget').value;
+  $('#importCsvNameRow').hidden = existing;
+  $('#importCsvAccount').required = !existing;
+}
+$('#importCsvTarget').addEventListener('change', syncImportTarget);
+// Pre-select the account whose last 4 digits match the file, so re-imports land where they belong.
+function pickTargetByMask(mask) {
+  if (!mask) return false;
+  const matches = [...$('#importCsvTarget').options].filter(option => option.dataset.mask === mask);
+  if (matches.length !== 1) return false;
+  $('#importCsvTarget').value = matches[0].value;
+  syncImportTarget();
+  return true;
+}
 function sniffCsv(header) {
   const columns = header.split(',').map(column => column.trim().toLowerCase().replace(/^"|"$/g, ''));
   const has = (...names) => names.every(name => columns.includes(name));
@@ -836,6 +856,17 @@ $('#importCsvFile').addEventListener('change', async event => {
   } else {
     $('#importCsvDetected').textContent = 'This file’s columns aren’t recognised yet.';
   }
+  $('#importCsvTarget').value = '';
+  syncImportTarget();
+  const fileText = (await file.slice(0, 20000).text()).replace(/^\ufeff/, '').split(/\r?\n/);
+  const header = fileText[0].split(',').map(column => column.trim().toLowerCase().replace(/^"|"$/g, ''));
+  const cardColumn = Math.max(header.indexOf('card no.'), header.indexOf('account number'));
+  const cardMask = cardColumn >= 0 && fileText[1] ? (fileText[1].split(',')[cardColumn] || '').replace(/\D/g, '').slice(-4) : '';
+  const nameMask = (file.name.match(/^([A-Za-z]+)(\d{4})_/) || file.name.match(/\.{2,}(\d{4})\.csv$/i) || []).slice(-1)[0] || '';
+  if (pickTargetByMask(cardMask || nameMask)) {
+    $('#importCsvDetected').textContent += ' Matched to your existing account by its last 4 digits.';
+    return;
+  }
   if ($('#importCsvAccount').value) return;
   const chase = file.name.match(/^([A-Za-z]+)(\d{4})_/);
   const capitalOne = file.name.match(/^\d{4}-\d{2}-\d{2}_(.+?)\.{2,}(\d{4})\.csv$/i);
@@ -854,7 +885,7 @@ $('#importCsvForm').addEventListener('submit', async event => {
   if (!file) return;
   if (file.size > 1_500_000) { toast('That file is too large to import.'); return; }
   const csv = await file.text();
-  const data = await act(() => api('POST', '/api/import/csv', {csv, kind: form.elements.kind.value, account: form.elements.account.value.trim(), mask: form.elements.mask.value.trim()}));
+  const data = await act(() => api('POST', '/api/import/csv', {csv, kind: form.elements.kind.value, account: form.elements.account.value.trim(), account_id: form.elements.target.value || undefined, mask: form.elements.mask.value.trim()}));
   if (data) {
     $('#importCsvDialog').close();
     toast(`Imported ${data.import.added} transaction${data.import.added === 1 ? '' : 's'}${data.import.skipped ? ` (${data.import.skipped} already imported)` : ''}${data.import.recategorized ? `, ${data.import.recategorized} recategorized` : ''}`);

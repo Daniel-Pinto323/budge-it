@@ -361,6 +361,15 @@ class IntegrationTest(unittest.TestCase):
         csv_conn = next(c for c in self.state()["connections"] if c["provider"] == "csv")
         self.assertEqual(csv_conn["status"], "healthy")
 
+    def test_35b_import_matches_account_by_last4_not_name(self):
+        renamed = {"csv": CHASE_CSV, "account": "Totally Different Name", "mask": "0986"}
+        again = self.client.request("POST", "/api/import/csv", renamed)[1]
+        self.assertEqual(again["import"], {"added": 0, "skipped": 14, "recategorized": 0})
+        acct = next(a for a in again["state"]["accounts"] if a["mask"] == "0986" and a["name"] == "Chase 0986")
+        chosen = self.client.request("POST", "/api/import/csv", {"csv": CHASE_CSV, "account": "x", "account_id": acct["id"]})[1]
+        self.assertEqual(chosen["import"]["added"], 0)
+        self.assertEqual(self.client.request("POST", "/api/import/csv", {"csv": CHASE_CSV, "account": "x", "account_id": "nope"})[0], 404)
+
     def test_36_capital_one_checking_import(self):
         body = {"csv": CAPONE_CSV, "account": "360 Checking", "mask": "9405"}
         status, payload, _ = self.client.request("POST", "/api/import/csv", body)

@@ -142,9 +142,28 @@ def import_csv(user_id: int, data: dict[str, Any]) -> dict[str, int]:
         names = category_names(conn, user_id)
         rules = {row["match"]: row["category"] for row in conn.execute(
             "SELECT match, category FROM category_rules WHERE user_id = ?", (user_id,))}
-        item_id = f"csv-{user_id}-{name.lower()}"
-        connection = conn.execute("SELECT id FROM connections WHERE provider = 'csv' AND provider_item_id = ?",
-                                  (item_id,)).fetchone()
+        # Pick the target account: an explicit choice wins, then a CSV account with the same last 4 digits
+        # (so renaming never splits one card in two), then the typed name.
+        target = None
+        if data.get("account_id"):
+            target = conn.execute(
+                "SELECT c.id FROM accounts a JOIN connections c ON c.id = a.connection_id "
+                "WHERE a.id = ? AND a.user_id = ? AND c.provider = 'csv'", (str(data["account_id"]), user_id)).fetchone()
+            if not target:
+                raise AppError("That account can't be imported into.", 404)
+        elif mask:
+            target = conn.execute(
+                "SELECT c.id FROM accounts a JOIN connections c ON c.id = a.connection_id "
+                "WHERE a.user_id = ? AND a.mask = ? AND COALESCE(a.kind_override, a.kind) = ? AND c.provider = 'csv' "
+                "ORDER BY a.rowid LIMIT 2", (user_id, mask, kind)).fetchall()
+            target = target[0] if len(target) == 1 else None  # ambiguous: fall back to the name
+        if target:
+            item_id = None
+            connection = target
+        else:
+            item_id = f"csv-{user_id}-{name.lower()}"
+            connection = conn.execute("SELECT id FROM connections WHERE provider = 'csv' AND provider_item_id = ?",
+                                      (item_id,)).fetchone()
         if connection:
             connection_id = connection["id"]
             conn.execute("UPDATE connections SET last_attempt_at = ?, last_success_at = ? WHERE id = ?",
