@@ -239,6 +239,8 @@ function renderAll() {
 function renderChrome() {
   const label = parseDay(`${month}-01`);
   $$('[data-month-name]').forEach(el => { el.textContent = label.toLocaleDateString('en-US', {month: 'long'}); });
+  // The Overview always shows the real current month; only the Budget tab can browse other months.
+  $$('[data-current-month-name]').forEach(el => { el.textContent = new Date().toLocaleDateString('en-US', {month: 'long'}); });
   $('#monthLabel').textContent = label.toLocaleDateString('en-US', {month: 'long', year: 'numeric'});
   $('#nextMonth').disabled = month >= monthKey(new Date());
   $('#demoBanner').hidden = !state.has_demo;
@@ -304,7 +306,7 @@ function attentionItems(summary, items) {
     if (connection.status === 'needs_reauth') list.push(['coral', '!', `${connection.institution} needs you to sign in again`, 'Updates are paused until you reconnect.', 'accounts']);
     else if (connection.status === 'error') list.push(['amber', '!', `${connection.institution} could not sync`, connection.error || 'Try syncing again later.', 'accounts']);
   }
-  const uncategorized = state.transactions.filter(t => t.category === 'Uncategorized' && !t.hidden && t.date.startsWith(month)).length;
+  const uncategorized = state.transactions.filter(t => t.category === 'Uncategorized' && !t.hidden && t.date.startsWith(monthKey(new Date()))).length;
   if (uncategorized) list.push(['blue', '?', `${uncategorized} uncategorized transaction${uncategorized === 1 ? '' : 's'}`, 'Give them a category so your budget is accurate.', 'budget', 'uncategorizedSection']);
   for (const item of items.filter(entry => entry.status === 'over').slice(0, 3)) {
     list.push(['coral', '↑', `${item.name} is ${money(item.spent - item.budget)} over`, `${money(item.spent)} spent of ${money(item.budget)}.`, 'budget']);
@@ -314,9 +316,10 @@ function attentionItems(summary, items) {
 }
 
 function renderOverview() {
-  const summary = monthSummary(month);
+  const nowMonth = monthKey(new Date());
+  const summary = monthSummary(nowMonth);
   const items = categoryItems(summary);
-  const previous = monthSummary(shiftMonth(month, -1));
+  const previous = monthSummary(shiftMonth(nowMonth, -1));
   $('#monthSpend').textContent = money(summary.spent);
   $('#lastMonthSpend').innerHTML = `${money(previous.spent)}<small>last month</small>`;
   $('#spendMeter').style.width = `${summary.budget ? Math.min(Math.max(summary.spent, 0) / summary.budget * 100, 100) : 0}%`;
@@ -603,6 +606,7 @@ document.addEventListener('click', event => {
   const pulse = target.closest('[data-pulse]');
   if (pulse) {
     expandedCategory = pulse.dataset.pulse;
+    month = monthKey(new Date());  // Overview tiles describe the current month, so open Budget on it
     go('budget');
     renderBudgets();
     document.querySelector(`[data-preview="${CSS.escape(expandedCategory)}"]`)?.scrollIntoView({block: 'center'});
@@ -610,6 +614,7 @@ document.addEventListener('click', event => {
   }
   const nav = target.closest('[data-view],[data-go]');
   if (nav) {
+    if (nav.dataset.go === 'budget') month = monthKey(new Date());  // links from Overview point at the current month
     go(nav.dataset.view || nav.dataset.go);
     const anchor = nav.dataset.scroll && document.getElementById(nav.dataset.scroll);
     if (anchor) {
