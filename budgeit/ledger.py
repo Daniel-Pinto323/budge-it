@@ -16,7 +16,7 @@ from . import db
 def recompute(conn, user_id: int) -> None:
     """Refresh the stored balance (and today's snapshot) of every CSV-backed account for a user."""
     accounts = conn.execute(
-        "SELECT a.id, a.anchor_cents, a.anchor_date FROM accounts a "
+        "SELECT a.id, a.anchor_cents, a.anchor_date, a.kind FROM accounts a "
         "JOIN connections c ON c.id = a.connection_id WHERE a.user_id = ? AND c.provider = 'csv'", (user_id,)).fetchall()
     today, stamp = db.today(), db.now()
     for a in accounts:
@@ -24,6 +24,11 @@ def recompute(conn, user_id: int) -> None:
         for row in conn.execute("SELECT amount_cents FROM transactions WHERE account_id = ? AND date > ?",
                                 (a["id"], a["anchor_date"] or "0000-00-00")):
             total -= row["amount_cents"]
+        if a["kind"] == "credit" and a["anchor_date"] is None and total > 0:
+            # A file that starts mid-cycle can hold a payment for purchases made before its first row. With no known
+            # starting balance that would read as a credit balance and inflate net worth, so show it as nothing owed
+            # until the user sets a real balance.
+            total = 0
         conn.execute("UPDATE accounts SET balance_cents = ?, balance_at = ? WHERE id = ?", (total, stamp, a["id"]))
         points = [(today, total)]
         if a["anchor_date"] and a["anchor_date"] < today:

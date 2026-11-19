@@ -370,6 +370,17 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(chosen["import"]["added"], 0)
         self.assertEqual(self.client.request("POST", "/api/import/csv", {"csv": CHASE_CSV, "account": "x", "account_id": "nope"})[0], 404)
 
+    def test_35c_unanchored_card_never_shows_a_credit_balance(self):
+        csv_text = ("Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
+                    "11/06/2026,11/06/2026,AUTOMATIC PAYMENT - THANK,,Payment,278.19,\n"
+                    "11/05/2026,11/05/2026,SHOP,Shopping,Sale,-10.00,\n")
+        payload = self.client.request("POST", "/api/import/csv", {"csv": csv_text, "account": "Mid Cycle Card", "mask": "8888"})[1]
+        acct = next(a for a in payload["state"]["accounts"] if a["mask"] == "8888")
+        self.assertEqual(acct["balance_cents"], 0)
+        self.client.request("PATCH", f"/api/accounts/{acct['id']}", {"amount": 5000, "owed": True, "as_of": "2026-11-01"})
+        acct = next(a for a in self.state()["accounts"] if a["mask"] == "8888")
+        self.assertEqual(acct["balance_cents"], -5000 + 27819 - 1000)  # an anchored balance may legitimately be positive
+
     def test_36_capital_one_checking_import(self):
         body = {"csv": CAPONE_CSV, "account": "360 Checking", "mask": "9405"}
         status, payload, _ = self.client.request("POST", "/api/import/csv", body)
@@ -476,7 +487,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual((txns["MARIANOS #538"]["amount"], txns["MARIANOS #538"]["category"]), (5857, "Groceries"))
         self.assertEqual(txns["BRFACTORY.COM"]["amount"], -8702)  # a credit is money back
         self.assertEqual(txns["CAPITAL ONE AUTOPAY PYMT"]["category"], "Transfer")
-        self.assertEqual(venture["balance_cents"], 32845)  # unanchored estimate
+        self.assertEqual(venture["balance_cents"], 0)  # unanchored: a payment for earlier purchases must not read as a credit
         # The matching withdrawal in a bank file does not change the card's balance.
         bank = ("Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n"
                 "1358,Withdrawal from CAPITAL ONE CRCARDPMT,10/22/26,Debit,300,5392.09\n"
@@ -484,7 +495,7 @@ class IntegrationTest(unittest.TestCase):
         state = self.client.request("POST", "/api/import/csv", {"csv": bank, "account": "360 Performance Savings"})[1]["state"]
         savings = account(state, "360 Performance Savings")
         self.assertEqual((savings["kind"], savings["subtype"], savings["balance_cents"]), ("depository", "savings", 539359))
-        self.assertEqual(account(state, "Capital One Venture")["balance_cents"], 32845)
+        self.assertEqual(account(state, "Capital One Venture")["balance_cents"], 0)
         # Types are editable: CSV accounts, provider accounts (override survives), and manual accounts.
         state = self.client.request("PATCH", f"/api/accounts/{savings['id']}", {"kind": "investment"})[1]["state"]
         self.assertEqual(account(state, "360 Performance Savings")["kind"], "investment")
@@ -519,8 +530,12 @@ class IntegrationTest(unittest.TestCase):
         rows = {t["merchant"]: t for t in state["transactions"] if t["account"].startswith("Hidden Card")}
         pay, coffee = rows["AUTOMATIC PAYMENT - THANK YOU"], rows["Coffee Shop"]
         self.assertEqual((pay["category"], pay["hidden"], coffee["hidden"]), ("Transfer", True, False))
+        # With no known starting balance, a card never shows as a credit balance.
+        card = next(a for a in state["accounts"] if a["name"] == "Hidden Card")
+        self.assertEqual(card["balance_cents"], 0)
         # Hidden means "not in the budget": the payment still lowers what is owed on the card.
-        self.assertEqual(next(a for a in state["accounts"] if a["name"] == "Hidden Card")["balance_cents"], 3600)
+        self.client.request("PATCH", f"/api/accounts/{card['id']}", {"amount": 10000, "owed": True, "as_of": "2026-11-01"})
+        self.assertEqual(next(a for a in self.state()["accounts"] if a["name"] == "Hidden Card")["balance_cents"], -6400)
         # Moving a transaction into or out of Transfer flips the default, and an explicit choice wins.
         state = self.client.request("PATCH", f"/api/transactions/{coffee['id']}", {"category": "Transfer"})[1]["state"]
         self.assertTrue(next(t for t in state["transactions"] if t["id"] == coffee["id"])["hidden"])

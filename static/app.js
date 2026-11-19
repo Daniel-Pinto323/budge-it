@@ -916,7 +916,7 @@ $('#accountsList').addEventListener('click', event => {
     const form = $('#setBalanceForm');
     form.dataset.id = balanceId;
     $('#setBalanceTitle').textContent = `Set current balance — ${account.name}`;
-    form.elements.owed.value = (account.balance_cents < 0 || (account.kind === 'credit' && !account.balance_cents)) ? '1' : '';
+    form.elements.owed.value = (account.balance_cents < 0 || account.kind === 'credit') ? '1' : '';  // cards default to money owed
     form.elements.amount.value = (Math.abs(account.balance_cents) / 100).toFixed(2);
     form.elements.as_of.value = todayISO();
     $('#setBalanceDialog').showModal();
