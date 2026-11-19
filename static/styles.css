@@ -48,3 +48,14 @@ td.amount{min-width:112px}
 #uncategorizedSection{scroll-margin-top:16px}#uncategorizedSection .empty-note{margin:8px 0}
 @keyframes flash{0%{box-shadow:0 0 0 3px #d9a13b99}100%{box-shadow:0 0 0 3px #d9a13b00}}.budget-group.flash{animation:flash 1.6s ease-out}
 .preview-note{font-size:11px;color:var(--muted);line-height:1.5;margin:4px 0 8px;max-width:520px}.category-preview .quiet-button{margin:2px 0 6px}
+
+/* Phone behaviour: the page is a fixed-width app, so it never zooms or pans sideways. Only tables scroll sideways,
+   and that scroll stays inside the table instead of chaining to the page. */
+html{-webkit-text-size-adjust:100%;overflow-x:hidden;overscroll-behavior-x:none}
+body{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y}
+.table-wrap{overscroll-behavior-x:contain;touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch}
+@media(max-width:620px){
+  /* iOS Safari zooms the whole page when a field under 16px is focused. */
+  input,select,textarea{font-size:16px!important}
+  .budget-pulse{overscroll-behavior-x:contain;touch-action:pan-x pan-y}
+}
